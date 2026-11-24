@@ -92,3 +92,31 @@ default since 2023 — set `S3_SSE=AES256` to be explicit), record the verified 
 Structured JSON logs without request bodies, tokens, passwords, PINs or financial payloads. Audit log
 (`/admin/audit`) records setup, sign-ins/failures, password changes/resets, user/role/permission
 changes, device revocations, settings changes. Sync monitoring stores counts and error codes only.
+
+## Phase 2 additions
+- **All 11 new financial tables** (bills, schedules, schedule_exceptions, card_profiles,
+  installment_plans, debts, goals, goal_entries, manual_assets, net_worth_snapshots, import_batches)
+  use the same three layers: workspace from session, `FORCE ROW LEVEL SECURITY` with the workspace
+  policy, composite foreign keys; `ft_app` has no DELETE on them. Tested in
+  `tests/integration/phase2-sync.test.ts` (user B cannot read or link to user A's bills, schedules,
+  debts, goals, receipts).
+- **Receipts for bills**: an attachment belongs to exactly one transaction *or* one bill (CHECK
+  constraint); download checks ownership through RLS.
+- **CSV import** is parsed on the device; the file is not uploaded. Only the resulting transactions
+  sync (with a fingerprint for duplicate detection).
+- **Reminders job** (`npm run reminders`) connects as `ft_app` and reads each user's data **only inside
+  that user's RLS context** (`withContext({ userId, workspaceId })`), exactly like the user's own
+  session. It stores only dedupe keys (`notification_log`: user id + an opaque key such as
+  `bill:<id>:overdue`), never amounts or names, and never logs user data.
+- **Web Push privacy**: payloads are encrypted to the device by the Web Push protocol (RFC 8291);
+  push services (Google, Apple, Mozilla) see only ciphertext and timing. By default the text is
+  **generic** ("You have 2 due soon") so nothing private shows on a lock screen; names and amounts
+  are included only if the user turns on *Show names and amounts*.
+- **Push subscriptions** are per user and per device (`push_subscriptions`, no financial data, no RLS:
+  always queried by the session's user id). They are revoked when the user signs out on that device,
+  when the device is revoked, when all devices are revoked or the user is deactivated, and when the
+  push service reports them gone (404/410). Users can only unsubscribe their own endpoints.
+- **Push limits (honest)**: browsers cannot schedule local notifications for a closed app; without
+  push there is no reminder while the app is closed. iOS delivers push only to Home-Screen apps
+  (iOS 16.4+). Phones may delay or batch notifications. Reminders reflect what has **synced** to the
+  server; unsynced changes on a device are not known to the reminders job.

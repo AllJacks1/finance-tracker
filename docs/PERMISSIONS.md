@@ -31,3 +31,9 @@ Rules
   tested with two Super Admins demoting each other concurrently).
 - Deactivation revokes all sessions and devices. Role changes revoke the user's sessions.
 - Every administrative action is written to the audit log without financial details.
+
+## Phase 2
+No new roles or permissions. Every Phase 2 record (bills, schedules, cards, debts, goals, net worth,
+imports, bill receipts) is financial data: owner-only, invisible to Super Admins and Managers.
+Notification preferences live in the user's own workspace settings. Admin device revocation also
+revokes that device's push subscription.

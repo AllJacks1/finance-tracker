@@ -8,6 +8,9 @@ privileged `MIGRATION_DATABASE_URL`; the app itself runs as `ft_app`.
 |---|---|---|
 | `0000_init.sql` | All tables, enums, indexes, CHECK constraints, composite foreign keys | No (new database) |
 | `0001_security.sql` | `ft_app` grants (no DELETE on financial tables; audit append-only), RLS helper functions, `FORCE ROW LEVEL SECURITY` + policies | No |
+| `0002_phase2_schema.sql` | Phase 2 tables (bills, schedules, schedule_exceptions, card_profiles, installment_plans, debts, goals, goal_entries, manual_assets, net_worth_snapshots, import_batches, push_subscriptions, notification_log); nullable link columns on `transactions` (bill, schedule + occurrence date, debt, installment plan, group, import batch + fingerprint) with unique indexes against duplicate occurrences/imports; `attachments` may belong to a bill; `workspaces.preferences`; `categories.is_essential` | No (additive) |
+| `0003_phase2_security.sql` | Grants (no DELETE on the 11 financial tables) and `FORCE ROW LEVEL SECURITY` + workspace policies; `push_subscriptions`/`notification_log` are per-user identity tables (no financial data) with DELETE allowed | No |
+| `0004_phase2_data.sql` | Data conversion: Phase 1 obligations → bills (same id, payments re-linked), reserves → savings goals (same id, opening contribution), converted allocations soft-deleted; default essential categories marked; "Interest & Fees" category added; every changed row gets a new `change_seq` so devices pull it | **Changes meaning of existing rows** (nothing hard-deleted). Back up first; see DEPLOYMENT.md rollback caveat |
 
 ## Roles
 - `ft_app` — created by `npm run db:roles` (once per Postgres cluster; needs a privileged URL and
@@ -31,3 +34,11 @@ privileged `MIGRATION_DATABASE_URL`; the app itself runs as `ft_app`.
 - Never edit an applied migration; add a new one.
 - Railway runs migrations in the **pre-deploy** step; if a migration fails the new version is not
   deployed and the old one keeps running.
+
+## Phase 2 notes
+- `0004` temporarily lifts `FORCE ROW LEVEL SECURITY` on the tables it converts (so a non-superuser
+  owner can see every workspace) and restores it before the end of the same migration transaction.
+- It is idempotent with respect to devices: converted rows keep their ids, and the bumped `change_seq`
+  makes every device pull the new bill/goal records and the allocation tombstones on its next sync.
+- Tested by `tests/integration/migration-0004.test.ts` (Phase 1 data → migrate → bills/goals with
+  correct paid amounts, allocations tombstoned, devices pull the changes).

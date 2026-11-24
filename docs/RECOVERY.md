@@ -14,6 +14,11 @@
 
 Device data that has not synced is not in any backup. Users should sync before uninstalling.
 
+Phase 2 tables are included automatically (the backup enumerates every table in `public`).
+After a restore: net-worth snapshots, bills, schedules and goals come back exactly as backed up;
+future occurrences are recomputed from schedules (they were never stored). Push subscriptions are
+restored too, but if the VAPID keys changed users must turn push on again.
+
 ## One-time: create the backup key
 On **your own computer** (not the server):
 ```bash

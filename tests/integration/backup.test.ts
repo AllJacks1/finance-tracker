@@ -18,6 +18,10 @@ describe("backup and restore", () => {
     await admin.unsafe(`CREATE DATABASE ${dbName}`);
     try {
       const { gz, manifest } = await createBackup(source);
+      // Phase 2 tables are part of every backup (the backup enumerates all tables).
+      const names = manifest.tables.map((t) => t.name);
+      for (const t of ["bills", "schedules", "schedule_exceptions", "card_profiles", "installment_plans", "debts", "goals", "goal_entries", "manual_assets", "net_worth_snapshots", "import_batches", "push_subscriptions", "notification_log"])
+        expect(names, t).toContain(t);
       const identity = await generateX25519Identity();
       const encrypted = await encryptBackup(gz, await identityToRecipient(identity));
       // Ciphertext must not contain recognisable data.

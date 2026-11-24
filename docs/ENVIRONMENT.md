@@ -20,6 +20,8 @@ Validated at first use by [`src/server/env.ts`](../src/server/env.ts). Never pre
 | `S3_SSE` | | `AES256` only on providers supporting SSE headers (AWS S3). Leave empty on Railway/R2. |
 | `LOG_LEVEL` | | `debug` \| `info` (default) \| `warn` \| `error`. |
 | `DB_POOL_MAX` | | Postgres pool size (default 10). |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | for push | Web Push key pair from `npm run vapid:keygen`. Without them push is simply unavailable (in-app reminders still work). **Changing the pair invalidates every device's push subscription** (users turn push on again). |
+| `VAPID_SUBJECT` | for push | Contact for push services, `mailto:you@example.com` or an `https://` URL. |
 
 ## Backup (cron) service
 
@@ -31,6 +33,14 @@ Validated at first use by [`src/server/env.ts`](../src/server/env.ts). Never pre
 
 The **private** backup key (`AGE-SECRET-KEY-1…`) must **never** be set on Railway. It is only used
 on your computer when restoring (`BACKUP_AGE_IDENTITY` or `--identity-file`).
+
+## Reminders (cron) service
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | ✅ | The **restricted `ft_app`** connection (same as web). The job reads each user's data only inside that user's RLS context. |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | ✅ | Same values as the web service. Without them the job logs `reminders_skipped` and exits. |
+| `LOG_LEVEL` | | As above. |
 
 ## Local development & tests
 `npm run db:local-setup` writes these to `.env.local` (git-ignored): `LOCAL_PG_SUPERUSER_URL` (you

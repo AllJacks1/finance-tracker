@@ -2,7 +2,7 @@
 
 Automated tests run in Chromium with an emulated phone viewport and a **mocked** Network Information
 API. They cannot prove real Wi-Fi/cellular detection, iOS behaviour, safe areas or the keyboard.
-Run this on real hardware against the deployed (HTTPS) app before calling Phase 1 complete.
+Run this on real hardware against the deployed (HTTPS) app before calling a phase complete.
 
 Record: device, OS version, browser, date, pass/fail, notes.
 
@@ -34,3 +34,17 @@ Record: device, OS version, browser, date, pass/fail, notes.
 ## Admin
 - [ ] Administration pages work on the phone; admins see no financial data of other users.
 - [ ] Revoke a phone from Security → Devices on another device → the phone, when next online, is signed out and its local data removed.
+
+## Phase 2 (both phones)
+- [ ] Bills: add a monthly bill; pay part of it, then the rest → *Partially paid* → *Paid*; payment history shows both.
+- [ ] Airplane mode: pay a bill partly, confirm a scheduled salary, add a card purchase → reconnect on Wi-Fi → everything syncs once (check on a second device: no duplicates).
+- [ ] Same occurrence confirmed on two phones while both offline → after both sync there is **one** transaction (or a visible conflict if amounts differ).
+- [ ] Credit card: purchase increases what you owe; payment from a bank account lowers it and is **not** counted as spending in budgets.
+- [ ] Loan payment splits into principal and interest; the loan balance drops by the principal only.
+- [ ] Emergency fund: switch target 3 / 6 / 9 / 12 months → coverage and target update.
+- [ ] Calendar month view: tap a day with dots → its items; cash-flow chart scrolls/zooms well on the phone.
+- [ ] CSV import: pick a bank CSV from Files/Downloads, map columns, import; import the same file again → rows marked *already imported*.
+- [ ] Bill receipt: attach a photo from the camera to a bill; view it online.
+- [ ] Notifications (Android Chrome / installed app): More → Notifications → *Turn on push* → allow. With a bill due, wait for the 08:00 reminder (or run the `reminders` service) → notification arrives; lock-screen text is generic; tapping opens Bills.
+- [ ] Notifications (iPhone): push works **only** from the Home Screen app on iOS 16.4+; in Safari the page says push isn't supported.
+- [ ] Sign out → push stops for that phone; another user signing in on that phone doesn't get the first user's reminders.

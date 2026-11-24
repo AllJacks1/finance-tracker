@@ -36,8 +36,8 @@ data, so the service worker can serve them offline. Pages that need IDs use quer
 - Composite foreign keys `(workspace_id, x_id) → x(workspace_id, id)` make cross-workspace links
   impossible at the database level.
 - Budget amount changes are stored as `amount_revisions` (JSON) so history uses the amount in effect.
-- `allocations` = reserves and obligations for Safe-to-Spend. A payment links to an obligation via
-  `transactions.allocation_id`; outstanding = amount − linked payments (no double deduction).
+- Phase 1 `allocations` (reserves/obligations) were replaced in Phase 2 by **bills** and **savings
+  goals** (migration `0004`); the table is kept for history only.
 
 ## finance-core (`src/lib/finance`)
 Pure functions used by both server and client: `money.ts` (centavos parse/format, safe integer
@@ -99,12 +99,44 @@ Chrome/Edge and Firefox do not**, so they always need manual sync. A laptop on a
 reports `wifi`; the browser cannot tell.
 
 ## Service worker (`scripts/sw-template.js` → `public/sw.js`)
-Generated after `next build` with the build id as version. Precaches the 16 static app pages,
+Generated after `next build` with the build id as version. Precaches every static app page
+(discovered from `.next/server/app/**/*.html`; 29 after Phase 2),
 all `/_next/static` assets, icons and the manifest. `/api`, `/admin`, `/setup` are network-only.
 RSC fetches fail fast offline so Next falls back to a full navigation, served from the cached shell.
 Updates wait for the user to tap "Update" (never auto-reload over unsaved input).
+Phase 2 adds `push` (show the notification from the encrypted payload) and `notificationclick`
+(focus an open window or open the target page) handlers.
 
-## Phase 2/3 extension points
-`categories.parent_id` (sub-categories), `budgets.rollover`, `allocations` (recurring bills can
-generate obligations), ledger entries (splits/debts), entity registry in `server/sync/entities.ts`
-(add an entity = schema + zod schema + registry entry + migration with grants/RLS).
+## Phase 2: planning layer
+
+**Principle: money moves only through ordinary transactions.** Bills, schedules, cards, debts, goals
+and snapshots are metadata layered on the ledger; balances are still derived only from transactions.
+
+| Concept | How it works |
+|---|---|
+| Recurrence (`recurrence.ts`) | Rules (daily/weekly/biweekly/monthly/yearly/custom interval, end date or count, pauses) are expanded on the fly. Month-end safe (31st → last day). |
+| Virtual occurrences | Future occurrences are **computed, never stored**. One is materialized only when the user acts on it (confirm, pay, skip, override), using a **deterministic UUIDv5 id** (`src/lib/domain/ids.ts`, e.g. `uuidv5(scheduleId + date)`). Two devices acting on the same occurrence produce the same id → the server sees an identical create (`duplicate`) or a visible conflict, never two records. DB unique indexes (`transactions_occurrence_uq`, `bills_occurrence_uq`) are the final backstop. |
+| Scheduled transactions | Shown as *pending confirmation* from their date (90-day lookback); they **never affect actual balances** until confirmed, which creates a normal transaction linked by `schedule_id` + `occurrence_date`. Edit future = end the old rule and start a new one (`previous_schedule_id`), so history is unchanged. |
+| Bills (`bills.ts`) | The single obligation mechanism: one-off bills, recurring bill schedules, credit-card statements and loan installments are all bills. Status is **derived** (upcoming / due today / partially paid / paid / overdue / cancelled) from due date and linked payments (`transactions.bill_id`). Partial and multiple payments are just several linked transactions. |
+| Credit cards (`cards.ts`) | `card_profiles` holds limit, statement day, due offset, minimum rule, APR. Statements are computed from card transactions in each cycle. Purchases are expenses on the card account; payments are **transfers** (not expenses). Installments (`installment_plans`) record one purchase expense and bill monthly amounts against the card. |
+| Debts (`debts.ts`) | A debt is metadata on a `loan` account. Payment = group of transfer (principal) + expense (interest, "Interest & Fees"). Diminishing / add-on / no-interest methods; payoff projection; snowball vs avalanche are **projections only**. |
+| Goals (`goals.ts`) | Goal contributions are **earmarks** (`goal_entries`), not ledger lines; optionally paired with a real transfer. Emergency fund coverage = funds ÷ monthly essentials, target 3/6/9/12 months (user choice), essentials averaged over the last 3/6/9/12 full months (user choice) or a manual override. |
+| Net worth (`networth.ts`) | Assets − liabilities from account balances + manual assets. Snapshots are **immutable** (server rejects updates); monthly auto snapshot with a deterministic id per month. |
+| Safe-to-Spend v2 (`safe-to-spend.ts`) | Spendable balances − goal earmarks held in spendable accounts − outstanding bills up to the horizon (end of month or next scheduled income) − unconfirmed scheduled outflows. Scheduled income is never added. |
+| Calendar / cash flow (`planning.ts`) | Merges bills, schedule occurrences and confirmed transactions per day without double counting (a paid occurrence shows once). 30/60/90-day projection from spendable balances. |
+| CSV import (`csv-import.ts`) | Parsed **on the device** (the file is never uploaded). Column mapping, validation per row, duplicate detection (exact re-import by fingerprint, likely match against existing transactions, repeats inside the file), confirm, undo. Server unique index on `(workspace, import_fingerprint)` prevents double imports from two devices. |
+| Notifications (`planning.ts → deriveNotifications`, `client/notify.ts`, `server/reminders.ts`) | In-app center computed locally (works offline). While the app is open, urgent items are also shown as system notifications. When closed, only Web Push can notify: a daily cron computes reminders per user and sends one push per user with new items. |
+
+### Sync protocol additions
+- **Atomic groups**: ops sharing a `groupId` (e.g. loan payment principal + interest, contribution +
+  transfer, bill payment + bill materialization) are applied all-or-nothing inside one savepoint and
+  are sent contiguously by the outbox. A failed group is not recorded in `sync_ops`, so a fixed retry
+  can succeed.
+- **Identical create ⇒ `duplicate`** (timestamps normalized before comparison), used by deterministic
+  ids. **Immutable entities** (net-worth snapshots) reject updates.
+- Unique violations map to explicit rejections: `duplicate_occurrence`, `duplicate_import`.
+
+## Phase 3 extension points
+`categories.parent_id` (sub-categories), `budgets.rollover`, ledger entries (splits), entity registry
+in `server/sync/entities.ts` (add an entity = schema + zod schema + registry entry + migration with
+grants/RLS).
