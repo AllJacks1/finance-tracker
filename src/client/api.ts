@@ -19,6 +19,9 @@ let fetcher: Fetcher = (path, init) => fetch(path, init);
 export function setFetcher(f: Fetcher) {
   fetcher = f;
 }
+export function getFetcher(): Fetcher {
+  return fetcher;
+}
 
 export async function api<T>(
   path: string,

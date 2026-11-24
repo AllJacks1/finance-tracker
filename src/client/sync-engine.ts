@@ -10,6 +10,8 @@ import type { OpResult, PullResponse, PushResponse, SyncOp } from "@/lib/sync/pr
 import { api, ApiCallError } from "./api";
 import type { OutboxEntry } from "./local-db";
 import type { WorkspaceStore } from "./store";
+import { uploadPendingReceipts } from "./receipts";
+import { getFetcher } from "./api";
 
 export type SyncPhase =
   | "idle"
@@ -173,6 +175,8 @@ export class SyncEngine {
       this.emit();
       try {
         await this.pushAll(opts.manual);
+        this.checkStillAllowed(opts.manual);
+        await uploadPendingReceipts(this.store, this.store.dek, getFetcher());
         await this.pullAll(opts.manual);
         this.lastSyncAt = new Date().toISOString();
         await this.store.setMeta("lastSyncAt", this.lastSyncAt);

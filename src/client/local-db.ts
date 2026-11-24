@@ -25,6 +25,7 @@ export class DeviceDB extends Dexie {
   constructor() {
     super("ft_device");
     this.version(1).stores({ kv: "key", users: "userId" });
+    this.version(2).stores({ kv: "key", users: "userId, lastUsedAt" });
   }
 }
 

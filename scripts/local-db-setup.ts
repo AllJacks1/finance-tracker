@@ -43,7 +43,7 @@ const vars: Record<string, string> = {
   DATABASE_URL: withDb("finance_dev", "ft_app", appPw),
   TEST_MIGRATION_DATABASE_URL: withDb("finance_test"),
   TEST_DATABASE_URL: withDb("finance_test", "ft_app", appPw),
-  APP_URL: "http://localhost:3000",
+  APP_URL: "http://localhost:3100",
   SETUP_TOKEN: get("SETUP_TOKEN") ?? randomBytes(18).toString("base64url"),
   APP_ENCRYPTION_KEY: get("APP_ENCRYPTION_KEY") ?? randomBytes(32).toString("base64"),
 };

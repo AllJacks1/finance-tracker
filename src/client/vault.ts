@@ -89,7 +89,12 @@ class Vault {
   // ------------------------------------------------------------------ startup
   private initPromise: Promise<void> | null = null;
   init(): Promise<void> {
-    this.initPromise ??= this.doInit();
+    this.initPromise ??= this.doInit().catch((e) => {
+      // Never leave the app on a spinner: fall back to the sign-in screen.
+      console.error("vault init failed", e);
+      this.initPromise = null;
+      this.set({ phase: "signed_out", user: null, message: "Couldn't open local data on this device. Please sign in again." });
+    });
     return this.initPromise;
   }
 

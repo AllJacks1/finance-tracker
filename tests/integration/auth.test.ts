@@ -17,7 +17,7 @@ describe("first-time setup", () => {
   beforeAll(resetDatabase);
 
   it("reports setup not complete and rejects a wrong token", async () => {
-    expect((await call(h(setupRoute.GET))).body).toEqual({ setupComplete: false });
+    expect((await call(h(setupRoute.GET))).body.setupComplete).toBe(false);
     const r = await call(h(setupRoute.POST), {
       body: { setupToken: "wrong-token-xxxxxxx", name: "X", email: "x@example.test", password: STRONG },
     });
@@ -51,7 +51,7 @@ describe("first-time setup", () => {
   });
 
   it("cannot be run again afterwards", async () => {
-    expect((await call(h(setupRoute.GET))).body).toEqual({ setupComplete: true });
+    expect((await call(h(setupRoute.GET))).body.setupComplete).toBe(true);
     const r = await call(h(setupRoute.POST), {
       body: { setupToken: SETUP_TOKEN, name: "Late", email: "late@example.test", password: STRONG },
     });

@@ -56,7 +56,8 @@ export class WorkspaceStore {
 
   constructor(
     readonly db: UserDB,
-    private readonly dek: CryptoKey,
+    /** Non-extractable data key; exists only while unlocked. */
+    readonly dek: CryptoKey,
     readonly userId: string,
   ) {
     if (typeof BroadcastChannel !== "undefined") {

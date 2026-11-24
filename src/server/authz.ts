@@ -50,3 +50,16 @@ export async function requireWorkspace(req: Request): Promise<AuthContext & { wo
   const workspaceId = await ensureWorkspace(auth.user.id);
   return { ...auth, workspaceId };
 }
+
+/**
+ * Same checks for Server Components (admin pages), reading the session cookie via next/headers.
+ * Returns null if not signed in.
+ */
+export async function authFromCookies(): Promise<AuthContext | null> {
+  const { cookies } = await import("next/headers");
+  const { sessionCookieName } = await import("./auth/session");
+  const token = (await cookies()).get(sessionCookieName())?.value ?? null;
+  const r = await loadSession(token);
+  if (!r.ok || r.session.deviceRevoked) return null;
+  return { ...r.session, permissions: await permissionsFor(r.session.user.id, r.session.user.role) };
+}
