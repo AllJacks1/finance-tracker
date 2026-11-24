@@ -1,36 +1,78 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Finance Tracker
 
-## Getting Started
+A private, **offline-first**, mobile-first personal finance tracker (PHP ₱), installable as a PWA.
+Phase 1: core finance tracker and infrastructure.
 
-First, run the development server:
+- Every user has one private workspace. Administrators manage users and the system but **cannot see anyone's financial records** (enforced in the app *and* by Postgres Row-Level Security).
+- All data lives first on the device, **encrypted in IndexedDB**, and syncs to PostgreSQL through an outbox. **Automatic sync runs only on positively-identified Wi-Fi**.
+- Offline unlock with a local PIN (key-wrapped data key, attempt limits, lockout).
+- Money is integer centavos everywhere — no floating point.
+
+> This is application-level privacy, **not** end-to-end encryption. Infrastructure and database
+> administrators can technically access data in PostgreSQL. See [docs/SECURITY.md](docs/SECURITY.md).
+
+## Stack
+Next.js 16 (App Router) · TypeScript · Tailwind CSS v4 · shadcn/ui (Radix) · Lucide · PostgreSQL (Drizzle ORM) · Dexie (IndexedDB) · Railway.
+
+## Quick start (local)
+
+Requirements: Node ≥ 22.12, PostgreSQL ≥ 15 running locally.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+# Put your local Postgres superuser URL in .env.local:
+#   LOCAL_PG_SUPERUSER_URL=postgres://postgres:<password>@localhost:5432/postgres
+npm run db:local-setup     # creates finance_dev + finance_test, the ft_app role, secrets, runs migrations
+npm run dev                # http://localhost:3100 (APP_URL in .env.local must match)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open the app → you are sent to **/setup** → enter the `SETUP_TOKEN` from `.env.local` and create the Super Admin.
+Then create users from **More → Administration → Users**.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The service worker is only active in production builds (`npm run build && npm start`).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Scripts
 
-## Learn More
+| Script | Purpose |
+|---|---|
+| `npm run dev` / `build` / `start` | Next.js (build also generates `public/sw.js`) |
+| `npm run typecheck`, `npm run lint` | Static checks |
+| `npm test` | Unit + integration tests (Vitest; integration uses the real `finance_test` DB) |
+| `npm run test:e2e` | Playwright E2E on the production build (run `npm run build` first) |
+| `npm run db:generate` | Generate a migration from `src/server/db/schema.ts` |
+| `npm run db:migrate` | Apply migrations (`MIGRATION_DATABASE_URL`) |
+| `npm run db:roles` | Create/update the restricted `ft_app` role |
+| `npm run backup` | Encrypted backup to object storage (Railway cron) |
+| `npm run backup:restore` | Restore a backup into a new database |
+| `npm run backup:keygen` | Generate the age key pair for backups |
 
-To learn more about Next.js, take a look at the following resources:
+## Documentation
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Doc | |
+|---|---|
+| [docs/PHASE-1-PLAN.md](docs/PHASE-1-PLAN.md) | Approved plan and decisions |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture, offline store, sync protocol, Wi-Fi policy |
+| [docs/SECURITY.md](docs/SECURITY.md) | Privacy model, encryption, PIN design and limitations |
+| [docs/PERMISSIONS.md](docs/PERMISSIONS.md) | Role/permission matrix |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Railway deployment, step by step |
+| [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) | Environment variables |
+| [docs/MIGRATIONS.md](docs/MIGRATIONS.md) | Database migrations and roles |
+| [docs/RECOVERY.md](docs/RECOVERY.md) | Backups and disaster recovery |
+| [docs/DEVICE-TEST-CHECKLIST.md](docs/DEVICE-TEST-CHECKLIST.md) | Manual tests on real phones |
+| [BUILD-LOG.md](BUILD-LOG.md) | What was built, test results, known limitations |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Project layout
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+src/
+  app/                 routes: /app/* (static offline shell), /admin/*, /login, /setup, /api/*
+  client/              offline client: crypto, IndexedDB, store/outbox, sync engine, vault (PIN)
+  components/          UI (shadcn/ui in components/ui; app/finance components)
+  lib/finance/         finance-core: money, ledger, balances, budgets, safe-to-spend (shared)
+  lib/sync/            sync protocol + Wi-Fi connection policy (shared)
+  lib/permissions.ts   permission matrix (shared)
+  server/              DB, auth, authorization, admin, sync, storage (server only)
+drizzle/               version-controlled SQL migrations
+scripts/               migrate, roles, backup/restore, icons, service-worker generator
+tests/                 integration (Vitest) and e2e (Playwright)
+```

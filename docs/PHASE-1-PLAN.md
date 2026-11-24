@@ -1,6 +1,6 @@
 # Phase 1 Implementation Plan — Core Finance Tracker and Infrastructure
 
-Status: **Draft, waiting for approval.** No application code has been written yet.
+Status: **Approved (defaults for Q1–Q7) and implemented.** See [BUILD-LOG.md](../BUILD-LOG.md) for results and the deviations from this plan.
 
 ---
 
