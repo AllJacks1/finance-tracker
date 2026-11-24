@@ -12,7 +12,9 @@ import { useFinance, useVault } from "@/client/hooks";
 import { currentProgress } from "@/lib/finance/budgets";
 import { endOfMonth, startOfMonth } from "@/lib/finance/dates";
 import { periodTotals } from "@/lib/finance/ledger";
-import { outstandingAmount, paidTowardAllocations } from "@/lib/finance/safe-to-spend";
+import { addDays } from "@/lib/finance/dates";
+import { StatusBadge } from "@/components/plan/bill-sheets";
+import { NotificationBell } from "@/components/plan/notifications";
 import { cn } from "@/lib/utils";
 
 export default function Dashboard() {
@@ -27,16 +29,15 @@ export default function Dashboard() {
     .map((b) => ({ b, p: currentProgress(b, f.liveTxns, f.today, f.settings.weekStart) }))
     .filter((x) => x.p)
     .sort((a, b) => b.p!.usedBp - a.p!.usedBp);
-  const paid = paidTowardAllocations(f.liveTxns);
-  const upcoming = f.allocations
-    .filter((a) => a.kind === "obligation" && a.status === "open" && outstandingAmount(a, paid) > 0)
+  const upcoming = f.bills
+    .filter((b) => b.outstanding > 0 && !b.cancelled && b.dueDate <= addDays(f.today, 7))
     .sort((a, b) => (a.dueDate ?? "9999") < (b.dueDate ?? "9999") ? -1 : 1)
     .slice(0, 4);
   const hasLiabilities = f.liveAccounts.some((a) => a.type === "credit_card" || a.type === "loan");
 
   return (
     <>
-      <PageHeader title={`Hi, ${v.user?.name?.split(" ")[0] ?? "there"}`} />
+      <PageHeader title={`Hi, ${v.user?.name?.split(" ")[0] ?? "there"}`} action={<NotificationBell />} />
 
       {f.liveAccounts.length === 0 ? (
         <EmptyState icon={<Wallet className="size-8" />} title="Add your first account">
@@ -48,14 +49,14 @@ export default function Dashboard() {
           {/* Safe to spend — projected */}
           <button type="button" onClick={() => setStsOpen(true)} className="press rounded-2xl bg-primary p-5 text-left text-primary-foreground shadow-sm">
             <div className="flex items-center justify-between text-sm opacity-90">
-              <span>Safe to spend · until {f.sts.horizonEnd.slice(5).replace("-", "/")}</span>
+              <span>Safe to spend · until {f.sts.horizonEnd.slice(5).replace("-", "/")}{f.settings.preferences.stsHorizon === "next_income" && f.nextIncome ? " (next income)" : ""}</span>
               <Info className="size-4" />
             </div>
             <div className="mt-1 text-4xl font-semibold tracking-tight">
               <Money value={f.sts.safeToSpend} />
             </div>
             <div className="mt-2 text-xs opacity-90">
-              Projected: spendable balances minus reserves and unpaid obligations
+              Projected: spendable money minus goal savings, unpaid bills and scheduled payments
             </div>
           </button>
           {f.sts.safeToSpend < 0 ? (
@@ -72,7 +73,7 @@ export default function Dashboard() {
               {hasLiabilities ? (
                 <Stat label="Liabilities" value={f.totals.liabilities} tone="expense" />
               ) : (
-                <Stat label="Set aside" value={f.sts.reserves + f.sts.obligations} hint="Reserves + obligations due" />
+                <Stat label="Set aside" value={f.sts.reserves + f.sts.obligations + f.sts.scheduled} hint="Goals, bills & scheduled" />
               )}
             </div>
           </section>
@@ -104,17 +105,29 @@ export default function Dashboard() {
             </section>
           ) : null}
 
+          {f.pending.length > 0 ? (
+            <Link href="/app/recurring" className="press flex items-center gap-3 rounded-2xl border border-warning/50 bg-warning/10 p-3">
+              <CalendarClock className="size-5 text-warning" />
+              <span className="flex-1 text-sm">
+                <b>{f.pending.length} scheduled item(s)</b> need confirmation. They aren&apos;t in your balances until you confirm.
+              </span>
+            </Link>
+          ) : null}
+
           {upcoming.length > 0 ? (
             <section className="grid gap-2">
-              <SectionTitle action={<Link href="/app/allocations" className="text-sm text-primary">Manage</Link>}>Upcoming obligations</SectionTitle>
+              <SectionTitle action={<Link href="/app/bills" className="text-sm text-primary">All bills</Link>}>Bills due soon</SectionTitle>
               <div className="grid rounded-2xl border p-1">
-                {upcoming.map((a) => (
-                  <Link key={a.id} href="/app/allocations" className="flex items-center gap-3 rounded-xl p-2">
+                {upcoming.slice(0, 5).map((b) => (
+                  <Link key={b.key} href={`/app/bills/view?id=${b.id}`} className="flex items-center gap-3 rounded-xl p-2">
                     <CalendarClock className="size-5 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                    <span className="text-right text-sm">
-                      <Money value={outstandingAmount(a, paid)} />
-                      <span className={cn("block text-xs", a.dueDate && a.dueDate < f.today ? "text-expense" : "text-muted-foreground")}>{a.dueDate ? `Due ${a.dueDate}` : "No due date"}</span>
+                    <span className="grid min-w-0 flex-1">
+                      <span className="truncate">{b.name}</span>
+                      <span className="text-xs text-muted-foreground">Due {b.dueDate}</span>
+                    </span>
+                    <span className="grid justify-items-end gap-0.5 text-sm">
+                      <Money value={b.outstanding} />
+                      <StatusBadge status={b.status} />
                     </span>
                   </Link>
                 ))}
@@ -138,7 +151,8 @@ export default function Dashboard() {
       <FormSheet open={stsOpen} onOpenChange={setStsOpen} title="How Safe to Spend is calculated" description="Actual balances minus money you've set aside. Budgets are plans, so they are not subtracted.">
         <Breakdown title="Spendable balances (actual)" total={f.sts.spendableBalance} lines={f.sts.spendableAccounts} />
         <Breakdown title="Reserved (projected)" total={-f.sts.reserves} lines={f.sts.reserveLines.map((l) => ({ ...l, amount: -l.amount }))} />
-        <Breakdown title={`Unpaid obligations due by ${f.sts.horizonEnd}`} total={-f.sts.obligations} lines={f.sts.obligationLines.map((l) => ({ ...l, amount: -l.amount }))} />
+        <Breakdown title={`Unpaid bills due by ${f.sts.horizonEnd}`} total={-f.sts.obligations} lines={f.sts.obligationLines.map((l) => ({ ...l, amount: -l.amount }))} />
+        <Breakdown title="Scheduled payments not yet confirmed" total={-f.sts.scheduled} lines={f.sts.scheduledLines.map((l) => ({ ...l, amount: -l.amount }))} />
         <div className="flex items-center justify-between rounded-xl bg-muted p-3 font-semibold">
           <span>Safe to spend</span>
           <Money value={f.sts.safeToSpend} />
@@ -151,8 +165,13 @@ export default function Dashboard() {
             ))}
           </div>
         ) : null}
-        <p className="text-xs text-muted-foreground">Savings accounts and credit cards aren&apos;t counted as spendable. Change this per account. Paying an obligation? Link the payment to it so it isn&apos;t subtracted twice.</p>
-        <Button variant="outline" asChild><Link href="/app/allocations">Manage reserves &amp; obligations <ChevronRight className="size-4" /></Link></Button>
+        <p className="text-xs text-muted-foreground">
+          Savings accounts and credit cards aren&apos;t counted as spendable (change this per account). Goal money in spendable accounts is set aside. Each bill counts once: paying it lowers your balance and removes it from this list. Scheduled income isn&apos;t added until it arrives.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="outline" asChild><Link href="/app/bills">Bills <ChevronRight className="size-4" /></Link></Button>
+          <Button variant="outline" asChild><Link href="/app/goals">Goals <ChevronRight className="size-4" /></Link></Button>
+        </div>
       </FormSheet>
     </>
   );

@@ -22,7 +22,7 @@ export const GET = route<Ctx>(async (req, { params }) => {
   return new Response(obj.body as Uint8Array<ArrayBuffer>, {
     headers: {
       "Content-Type": att.mime,
-      "Content-Disposition": `inline; filename="${safeName}"`,
+      "Content-Disposition": `${new URL(req.url).searchParams.get("download") === "1" ? "attachment" : "inline"}; filename="${safeName}"`,
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",

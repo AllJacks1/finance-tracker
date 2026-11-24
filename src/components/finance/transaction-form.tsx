@@ -15,6 +15,7 @@ import { currentProgress, crossedThreshold } from "@/lib/finance/budgets";
 import { formatPHP, type Centavos } from "@/lib/finance/money";
 import { cn } from "@/lib/utils";
 import { ReceiptPicker } from "./receipts";
+import { ensureBillStored } from "@/client/plan-actions";
 
 export const TYPE_LABEL: Record<TxnType, string> = {
   expense: "Expense",
@@ -100,7 +101,7 @@ function TransactionSheet({
   const [description, setDescription] = React.useState(base.description ?? "");
   const [notes, setNotes] = React.useState(base.notes ?? "");
   const [tagIds, setTagIds] = React.useState<string[]>(base.tagIds ?? []);
-  const [allocationId, setAllocationId] = React.useState(base.allocationId ?? "");
+  const [billId, setBillId] = React.useState(base.billId ?? "");
   const [refundOfId, setRefundOfId] = React.useState(base.refundOfId ?? "");
   const [newTag, setNewTag] = React.useState("");
   const [asTemplate, setAsTemplate] = React.useState(false);
@@ -115,7 +116,13 @@ function TransactionSheet({
     () => f.liveTxns.filter((t) => t.type === "expense").sort((a, b) => (a.occurredAt < b.occurredAt ? 1 : -1)).slice(0, 30),
     [f.liveTxns],
   );
-  const openObligations = f.allocations.filter((a) => a.kind === "obligation" && a.status === "open");
+  // Bills this payment could settle: open regular bills for expenses; card statements for transfers into that card.
+  const payableBills = f.bills.filter(
+    (b) =>
+      !b.cancelled &&
+      (b.outstanding > 0 || b.id === billId) &&
+      (type === "expense" ? b.kind === "general" : type === "transfer" ? b.kind === "card_payment" && b.cardAccountId === toAccountId : false),
+  );
 
   const applyTemplate = (tid: string) => {
     const t = f.templates.find((x) => x.id === tid);
@@ -152,10 +159,12 @@ function TransactionSheet({
         notes: notes.trim() || null,
         tagIds,
         refundOfId: type === "refund" ? refundOfId || null : null,
-        // Keep Phase 2 links (bill, schedule, debt, import…) of an existing transaction.
+        // Keep Phase 2 links (schedule, debt, import…) of an existing transaction.
         ...pickTxnLinks(base),
-        allocationId: type === "expense" || type === "transfer" ? allocationId || null : null,
+        billId: type === "expense" || type === "transfer" ? billId || null : null,
       };
+      const linked = data.billId ? f.bills.find((b) => b.id === data.billId) : undefined;
+      if (linked) await ensureBillStored(linked); // a recurring bill is saved before linking
       await saveTransaction(data);
       if (asTemplate) {
         await saveTemplate({
@@ -334,12 +343,18 @@ function TransactionSheet({
           <Input id="desc" value={description} maxLength={200} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. Groceries at SM" enterKeyHint="done" />
         </Field>
 
-        {(type === "expense" || type === "transfer") && openObligations.length > 0 ? (
-          <Field label="Pays an obligation (optional)" htmlFor="alloc" hint="Linking a payment stops the obligation being deducted twice from Safe-to-Spend.">
-            <NativeSelect id="alloc" value={allocationId} onChange={(e) => setAllocationId(e.target.value)}>
-              <option value="">None</option>
-              {openObligations.map((a) => (
-                <option key={a.id} value={a.id}>{a.name} · {formatPHP(a.amount)}</option>
+        {(type === "expense" || type === "transfer") && payableBills.length > 0 ? (
+          <Field label="This pays a bill (optional)" htmlFor="billlink" hint="Linked payments mark the bill paid, so it isn't counted twice.">
+            <NativeSelect id="billlink" value={billId} onChange={(e) => {
+              setBillId(e.target.value);
+              const b = f.bills.find((x) => x.id === e.target.value);
+              if (b && !amount) setAmount(b.outstanding);
+              if (b && !description) setDescription(b.name);
+              if (b?.categoryId && !categoryId) setCategoryId(b.categoryId);
+            }}>
+              <option value="">No</option>
+              {payableBills.map((b) => (
+                <option key={b.id} value={b.id}>{b.name} · due {b.dueDate} · {formatPHP(b.outstanding)} left</option>
               ))}
             </NativeSelect>
           </Field>

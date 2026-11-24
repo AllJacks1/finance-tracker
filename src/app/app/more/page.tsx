@@ -19,7 +19,7 @@ import {
 
 const ITEMS = [
   { href: "/app/accounts", label: "Accounts", icon: Landmark, desc: "Balances, transfers, reconciliation" },
-  { href: "/app/allocations", label: "Reserves & obligations", icon: Wallet2, desc: "Money set aside and bills to pay" },
+  { href: "/app/recurring", label: "Recurring & scheduled", icon: Wallet2, desc: "Salary, transfers, repeating bills" },
   { href: "/app/categories", label: "Categories & tags", icon: FolderTree, desc: "Organise your spending" },
   { href: "/app/templates", label: "Templates", icon: LayoutTemplate, desc: "Reusable transactions" },
   { href: "/app/sync", label: "Sync & conflicts", icon: RefreshCw, desc: "Status, conflicts, failed changes" },

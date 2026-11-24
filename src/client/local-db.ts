@@ -72,7 +72,9 @@ export interface ConflictEntry extends Wrapped {
 
 export interface PendingBlob extends Wrapped {
   id: string; // attachment id
+  /** Owner: exactly one of transactionId / billId. */
   transactionId: string;
+  billId?: string;
   filename: string;
   mime: string;
   sizeBytes: number;

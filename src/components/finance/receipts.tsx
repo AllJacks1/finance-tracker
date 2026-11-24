@@ -9,12 +9,13 @@ import { vault } from "@/client/vault";
 import { addReceipt, readPendingReceipt } from "@/client/receipts";
 import { remove } from "@/client/actions";
 
-export function ReceiptPicker({ transactionId, saved }: { transactionId: string; saved: boolean }) {
+export function ReceiptPicker({ transactionId, billId, saved, beforeAttach }: { transactionId?: string; billId?: string; saved: boolean; beforeAttach?: () => Promise<void> }) {
   const input = React.useRef<HTMLInputElement>(null);
-  const attachments = useRecords("attachment").filter((a) => a.data.transactionId === transactionId);
+  const ownerId = billId ?? transactionId ?? "";
+  const attachments = useRecords("attachment").filter((a) => (billId ? a.data.billId === billId : a.data.transactionId === transactionId));
   const pending = useLiveQuery(
-    () => vault.store?.db.blobs.toArray().then((all) => all.filter((b) => b.transactionId === transactionId)) ?? [],
-    [transactionId],
+    () => vault.store?.db.blobs.toArray().then((all) => all.filter((b) => (billId ? b.billId === billId : b.transactionId === transactionId && !b.billId))) ?? [],
+    [ownerId],
   );
 
   if (!saved) return <p className="text-xs text-muted-foreground">Save first, then open the transaction again to attach a receipt.</p>;
@@ -24,7 +25,8 @@ export function ReceiptPicker({ transactionId, saved }: { transactionId: string;
     e.target.value = "";
     if (!file || !vault.store) return;
     try {
-      await addReceipt(vault.store, vault.store!.dek, transactionId, file);
+      await beforeAttach?.();
+      await addReceipt(vault.store, vault.store!.dek, billId ? { billId } : { transactionId: transactionId! }, file);
       toast.success("Receipt saved on this device. It uploads on the next sync.");
     } catch (err) {
       toast.error((err as Error).message);
@@ -43,6 +45,9 @@ export function ReceiptPicker({ transactionId, saved }: { transactionId: string;
           <FileText className="size-4 shrink-0 text-muted-foreground" />
           <a className="min-w-0 flex-1 truncate text-primary" href={`/api/receipts/${a.id}`} target="_blank" rel="noopener">
             {a.data.filename}
+          </a>
+          <a className="text-xs text-muted-foreground underline-offset-2 hover:underline" href={`/api/receipts/${a.id}?download=1`} download>
+            Download
           </a>
           <Button size="icon-sm" variant="ghost" aria-label="Remove receipt" onClick={() => void remove("attachment", a.id)}>
             <Trash2 className="size-4" />

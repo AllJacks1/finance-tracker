@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { requireWorkspace } from "@/server/authz";
 import { withContext } from "@/server/db";
-import { attachments, transactions } from "@/server/db/schema";
+import { attachments, bills, transactions } from "@/server/db/schema";
 import { ApiError, json, route } from "@/server/http";
 import { putObject } from "@/server/storage";
 import { toServerRecord } from "@/server/sync/push";
@@ -14,7 +14,8 @@ const MAX = 5 * 1024 * 1024;
 const TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
 const query = z.object({
   id: z.uuid(),
-  transactionId: z.uuid(),
+  transactionId: z.uuid().optional(),
+  billId: z.uuid().optional(),
   filename: z.string().min(1).max(200),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
 });
@@ -37,8 +38,14 @@ export const POST = route(async (req) => {
   const ctx = { userId: auth.user.id, workspaceId: auth.workspaceId };
   // Ownership: RLS only shows the caller's own transactions.
   const existing = await withContext(ctx, async (tx) => {
-    const [t] = await tx.select({ id: transactions.id }).from(transactions).where(and(eq(transactions.id, q.transactionId), isNull(transactions.deletedAt)));
-    if (!t) throw new ApiError(404, "not_found", "Transaction not found");
+    if (!!q.transactionId === !!q.billId) throw new ApiError(400, "invalid_owner", "Attach to a transaction or a bill");
+    if (q.transactionId) {
+      const [t] = await tx.select({ id: transactions.id }).from(transactions).where(and(eq(transactions.id, q.transactionId), isNull(transactions.deletedAt)));
+      if (!t) throw new ApiError(404, "not_found", "Transaction not found");
+    } else {
+      const [b] = await tx.select({ id: bills.id }).from(bills).where(and(eq(bills.id, q.billId!), isNull(bills.deletedAt)));
+      if (!b) throw new ApiError(404, "not_found", "Bill not found");
+    }
     const [a] = await tx.select().from(attachments).where(eq(attachments.id, q.id));
     return a;
   });
@@ -55,7 +62,8 @@ export const POST = route(async (req) => {
         id: q.id,
         workspaceId: auth.workspaceId,
         changeSeq: seq,
-        transactionId: q.transactionId,
+        transactionId: q.transactionId ?? null,
+        billId: q.billId ?? null,
         objectKey,
         filename: q.filename,
         mime,

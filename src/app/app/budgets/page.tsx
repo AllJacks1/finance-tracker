@@ -3,6 +3,7 @@ import * as React from "react";
 import Link from "next/link";
 import { AlertTriangle, PieChart, Plus } from "lucide-react";
 import { PageHeader } from "@/components/app/app-shell";
+import { PlanTabs } from "@/components/plan/plan-tabs";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { BudgetSheet, PERIOD_LABEL } from "@/components/finance/budget-form";
@@ -23,7 +24,8 @@ export default function BudgetsPage() {
 
   return (
     <>
-      <PageHeader title="Budgets" action={<Button size="icon" variant="outline" aria-label="New budget" onClick={() => { setKey((k) => k + 1); setOpen(true); }}><Plus className="size-4" /></Button>} />
+      <PageHeader title="Budgets" action={<Button size="icon" variant="outline" aria-label="New budget" onClick={() => { setKey((k) => k + 1); setOpen(true); }}><Plus className="size-4" />
+      <PlanTabs /></Button>} />
       {f.budgets.length === 0 ? (
         <EmptyState icon={<PieChart className="size-8" />} title="No budgets yet">
           <p>Set an overall monthly budget, then optional limits for categories like Food or Transportation.</p>

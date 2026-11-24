@@ -30,7 +30,9 @@ export async function compressImage(file: File): Promise<Blob> {
   }
 }
 
-export async function addReceipt(store: WorkspaceStore, dek: CryptoKey, transactionId: string, file: File) {
+export type ReceiptOwner = { transactionId: string } | { billId: string };
+
+export async function addReceipt(store: WorkspaceStore, dek: CryptoKey, owner: ReceiptOwner, file: File) {
   const blob = await compressImage(file);
   const mime = blob.type || file.type;
   if (!RECEIPT_TYPES.includes(mime)) throw new Error("Use a photo (JPEG, PNG, WebP) or a PDF.");
@@ -40,7 +42,8 @@ export async function addReceipt(store: WorkspaceStore, dek: CryptoKey, transact
   const enc = await encryptBytes(dek, bytes);
   const entry: PendingBlob = {
     id: crypto.randomUUID(),
-    transactionId,
+    transactionId: "transactionId" in owner ? owner.transactionId : "",
+    billId: "billId" in owner ? owner.billId : undefined,
     filename: (file.name || "receipt").slice(0, 200).replace(/\.[^.]+$/, mime === "application/pdf" ? ".pdf" : ".jpg"),
     mime,
     sizeBytes: bytes.length,
@@ -65,10 +68,11 @@ export async function readPendingReceipt(store: WorkspaceStore, dek: CryptoKey, 
 export async function uploadPendingReceipts(store: WorkspaceStore, dek: CryptoKey, fetcher: (path: string, init: RequestInit) => Promise<Response>) {
   const pending = await store.db.blobs.where("status").equals("pending").toArray();
   for (const b of pending) {
-    const txn = store.get("transaction", b.transactionId);
-    if (!txn || txn.version === 0) continue; // transaction not synced yet
+    // Upload only once the owner (transaction or bill) exists on the server.
+    const owner = b.billId ? store.get("bill", b.billId) : store.get("transaction", b.transactionId);
+    if (!owner || owner.version === 0) continue;
     const bytes = await decryptBytes(dek, b);
-    const qs = new URLSearchParams({ id: b.id, transactionId: b.transactionId, filename: b.filename, sha256: b.sha256 });
+    const qs = new URLSearchParams({ id: b.id, filename: b.filename, sha256: b.sha256, ...(b.billId ? { billId: b.billId } : { transactionId: b.transactionId }) });
     let res: Response;
     try {
       res = await fetcher(`/api/receipts?${qs}`, {

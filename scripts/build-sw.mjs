@@ -19,24 +19,15 @@ const staticFiles = walk(".next/static")
   .filter((f) => !f.endsWith(".map"))
   .map((f) => "/_next/static/" + relative(".next/static", f).split(sep).join("/"));
 
-const PAGES = [
-  "/app",
-  "/app/transactions",
-  "/app/accounts",
-  "/app/accounts/view",
-  "/app/budgets",
-  "/app/budgets/view",
-  "/app/more",
-  "/app/allocations",
-  "/app/categories",
-  "/app/templates",
-  "/app/sync",
-  "/app/security",
-  "/app/export",
-  "/app/settings",
-  "/login",
-  "/change-password",
-];
+// Every statically prerendered page under /app plus the sign-in pages (discovered from the build,
+// so new pages are precached automatically). Dynamic pages (/admin, /setup) are never cached.
+const serverApp = ".next/server/app";
+const PAGES = walk(serverApp)
+  .filter((f) => f.endsWith(".html"))
+  .map((f) => "/" + relative(serverApp, f).split(sep).join("/").replace(/\.html$/, "").replace(/\/index$/, ""))
+  .map((r) => (r === "/index" ? "/" : r))
+  .filter((r) => r === "/app" || r.startsWith("/app/") || r === "/login" || r === "/change-password")
+  .sort();
 
 const extra = ["/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/maskable-512.png", "/icons/apple-touch-icon.png"].filter(
   (u) => existsSync(join("public", u)),

@@ -10,6 +10,7 @@ import { vault } from "@/client/vault";
 import { cn } from "@/lib/utils";
 import { LockScreen } from "./lock-screen";
 import { SyncChip, SyncSheet } from "./sync-status";
+import { isPlanPath } from "@/components/plan/plan-tabs";
 import { QuickAddProvider, useQuickAdd } from "@/components/finance/transaction-form";
 
 /** Gate for the finance app: shows the lock screen or redirects to sign-in as needed. */
@@ -108,7 +109,7 @@ const NAV = [
   { href: "/app", label: "Home", icon: Home },
   { href: "/app/transactions", label: "Activity", icon: ArrowLeftRight },
   { href: "#add", label: "Add", icon: Plus },
-  { href: "/app/budgets", label: "Budgets", icon: PieChart },
+  { href: "/app/calendar", label: "Plan", icon: PieChart },
   { href: "/app/more", label: "More", icon: MoreHorizontal },
 ];
 
@@ -132,7 +133,7 @@ function BottomNav() {
                 </button>
               </li>
             );
-          const active = n.href === "/app" ? path === "/app" : path?.startsWith(n.href);
+          const active = n.href === "/app" ? path === "/app" : n.href === "/app/calendar" ? isPlanPath(path) : path?.startsWith(n.href);
           return (
             <li key={n.href}>
               <Link
