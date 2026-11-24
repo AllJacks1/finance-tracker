@@ -73,9 +73,10 @@ export function toSnapshot(id: string, nw: NetWorth, kind: "auto" | "manual", re
 }
 
 /** Month-end date for which an automatic snapshot is due, or null. */
-export function autoSnapshotDue(snapshots: readonly Live<NetWorthSnapshot>[], today: ISODate, hasData: boolean): ISODate | null {
-  if (!hasData) return null;
+export function autoSnapshotDue(snapshots: readonly Live<NetWorthSnapshot>[], today: ISODate, earliestOpening: ISODate | null): ISODate | null {
   const lastMonthEnd = addDays(startOfMonth(today), -1);
+  // Nothing to record for a month that ended before the user had any account.
+  if (!earliestOpening || earliestOpening > lastMonthEnd) return null;
   const exists = snapshots.some((s) => s.kind === "auto" && s.snapshotDate === lastMonthEnd);
   return exists ? null : lastMonthEnd;
 }

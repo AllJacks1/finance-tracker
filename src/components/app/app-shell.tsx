@@ -5,7 +5,9 @@ import { usePathname, useRouter } from "next/navigation";
 import { ArrowLeftRight, Home, MoreHorizontal, PieChart, Plus } from "lucide-react";
 import { CloudDownload, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useSyncStatus, useVault } from "@/client/hooks";
+import { useFinance, useSyncStatus, useVault } from "@/client/hooks";
+import { takeSnapshot } from "@/client/goal-actions";
+import { autoSnapshotDue } from "@/lib/finance/networth";
 import { vault } from "@/client/vault";
 import { cn } from "@/lib/utils";
 import { LockScreen } from "./lock-screen";
@@ -56,6 +58,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <main className="flex-1 px-4 pb-28 pt-safe">
           {children}
           <FirstSyncBanner />
+          <AutoSnapshot />
         </main>
         <BottomNav />
       </div>
@@ -103,6 +106,21 @@ function FirstSyncBanner() {
       <SyncSheet open={open} onOpenChange={setOpen} />
     </>
   );
+}
+
+/**
+ * Records the month-end net-worth snapshot the first time the app is opened after a month ends.
+ * Only after this device has synced (so it isn't computed from incomplete data). Deterministic id:
+ * if several devices do this, the first one recorded wins and is never rewritten.
+ */
+function AutoSnapshot() {
+  const f = useFinance();
+  const s = useSyncStatus();
+  const due = s?.lastSyncAt && f.settings.id ? autoSnapshotDue(f.snapshots, f.today, f.liveAccounts.reduce<string | null>((m, a) => (m === null || a.openingDate < m ? a.openingDate : m), null)) : null;
+  React.useEffect(() => {
+    if (due) void takeSnapshot("auto", due).catch(() => {});
+  }, [due]);
+  return null;
 }
 
 const NAV = [

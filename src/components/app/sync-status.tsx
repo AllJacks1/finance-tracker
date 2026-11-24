@@ -51,7 +51,8 @@ export function SyncChip() {
   const s = useSyncStatus();
   const [open, setOpen] = React.useState(false);
   if (!s) return null;
-  const short = s.label.replace("Paused – ", "Paused · ");
+  // Compact label for the header; the full status is in the accessible name and the sheet.
+  const short = s.label.startsWith("Paused") ? "Paused" : s.label === "Conflict detected" ? "Conflict" : s.label === "Sign in to sync" ? "Sign in" : s.label;
   return (
     <>
       <button

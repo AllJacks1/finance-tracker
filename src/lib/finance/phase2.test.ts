@@ -278,8 +278,9 @@ describe("net worth", () => {
     const now = netWorthAsOf(accounts, [late], [asset], "2026-10-31");
     expect(snap.netWorth).toBe(42_000_000);
     expect(snapshotDrift(snap, now)).toBe(-100_000);
-    expect(autoSnapshotDue([snap], "2026-11-24", true)).toBeNull();
-    expect(autoSnapshotDue([snap], "2026-12-02", true)).toBe("2026-11-30");
+    expect(autoSnapshotDue([snap], "2026-11-24", "2026-01-01")).toBeNull();
+    expect(autoSnapshotDue([snap], "2026-12-02", "2026-01-01")).toBe("2026-11-30");
+    expect(autoSnapshotDue([], "2026-12-02", "2026-12-01")).toBeNull(); // no account yet at month end
   });
 });
 
