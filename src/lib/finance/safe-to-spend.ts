@@ -1,7 +1,12 @@
 /**
  * Safe-to-Spend
  *
- *   safeToSpend = spendable balances - open reserves - outstanding obligations due by the horizon
+ *   safeToSpend = spendable balances
+ *               - reserves (Phase 1 reserves + savings-goal money held in spendable accounts)
+ *               - outstanding obligations due by the horizon (Phase 1 obligations + BILLS, incl.
+ *                 card statements and loan installments; overdue included)
+ *               - unconfirmed scheduled outflows from spendable money due by the horizon
+ *   Scheduled income is never added (not received yet).
  *
  * Rules that prevent double deductions:
  *  1. Only "spendable" accounts count (active asset accounts flagged counts-as-spendable; by default
@@ -21,6 +26,9 @@ import { isSpendable } from "./balances";
 import { type ISODate } from "./dates";
 import { isLive } from "./ledger";
 import { add, type Centavos } from "./money";
+import type { BillView } from "./bills";
+import type { EarmarkLine } from "./goals";
+import type { FlowLine } from "./planning";
 
 type Acc = Account & { deletedAt?: string | null };
 type Alloc = Allocation & { deletedAt?: string | null };
@@ -43,6 +51,9 @@ export interface SafeToSpend {
   reserveLines: StsLine[];
   obligationLines: StsLine[];
   excluded: StsLine[]; // allocations not deducted, with reason
+  /** Phase 2: unconfirmed scheduled outflows from spendable money due by the horizon. */
+  scheduled: Centavos;
+  scheduledLines: StsLine[];
 }
 
 /** Amount already paid towards each allocation, from linked live transactions. */
@@ -68,6 +79,12 @@ export function computeSafeToSpend(input: {
   allocations: readonly Alloc[];
   txns: readonly Txn[];
   horizonEnd: ISODate;
+  /** Phase 2: bills (stored + virtual, incl. card statements and loan installments). */
+  bills?: readonly BillView[];
+  /** Phase 2: unconfirmed scheduled outflows (see planning.scheduledOutflows). */
+  scheduled?: readonly FlowLine[];
+  /** Phase 2: goal earmarks (see goals.goalEarmarks). */
+  goals?: { deducted: readonly EarmarkLine[]; notDeducted: readonly EarmarkLine[] };
 }): SafeToSpend {
   const { accounts, balances, allocations, txns, horizonEnd } = input;
   const byId = new Map(accounts.map((a) => [a.id, a]));
@@ -122,11 +139,45 @@ export function computeSafeToSpend(input: {
     }
   }
 
+  // ---- Phase 2 sources (each obligation has exactly one source: its bill) ----
+  for (const g of input.goals?.deducted ?? []) {
+    reserves = add(reserves, g.amount);
+    reserveLines.push({ id: g.id, name: g.name, amount: g.amount, note: "Savings goal" });
+  }
+  for (const g of input.goals?.notDeducted ?? []) excluded.push({ id: g.id, name: g.name, amount: g.amount, note: g.note });
+
+  for (const b of input.bills ?? []) {
+    if (b.cancelled || b.outstanding === 0) continue;
+    if (b.dueDate > horizonEnd) continue;
+    const pay = b.accountId ? byId.get(b.accountId) : undefined;
+    if (pay && !isSpendable(pay)) {
+      excluded.push({ id: b.id, name: b.name, amount: b.outstanding, note: "Paid from an account that isn't counted as spendable" });
+      continue;
+    }
+    obligations = add(obligations, b.outstanding);
+    obligationLines.push({
+      id: b.id,
+      name: b.name,
+      amount: b.outstanding,
+      note: b.status === "overdue" ? `Overdue since ${b.dueDate}` : `Due ${b.dueDate}`,
+    });
+  }
+
+  let scheduled = 0;
+  const scheduledLines: StsLine[] = [];
+  for (const f of input.scheduled ?? []) {
+    if (f.date > horizonEnd) continue;
+    scheduled = add(scheduled, f.amount);
+    scheduledLines.push({ id: f.key, name: f.name, amount: f.amount, note: `Scheduled ${f.date}` });
+  }
+
   return {
     spendableBalance,
     reserves,
     obligations,
-    safeToSpend: add(spendableBalance, -reserves, -obligations),
+    scheduled,
+    scheduledLines,
+    safeToSpend: add(spendableBalance, -reserves, -obligations, -scheduled),
     horizonEnd,
     spendableAccounts,
     reserveLines,
