@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Download, FolderTree, Landmark, LayoutTemplate, LogOut, RefreshCw, Settings, Shield, ShieldCheck, Wallet2 } from "lucide-react";
+import { ChevronRight, CreditCard, Download, FolderTree, Landmark, LayoutTemplate, LogOut, RefreshCw, Settings, Shield, ShieldCheck, Wallet2 } from "lucide-react";
 import { PageHeader } from "@/components/app/app-shell";
 import { useSyncStatus, useVault } from "@/client/hooks";
 import { vault } from "@/client/vault";
@@ -20,6 +20,7 @@ import {
 const ITEMS = [
   { href: "/app/accounts", label: "Accounts", icon: Landmark, desc: "Balances, transfers, reconciliation" },
   { href: "/app/recurring", label: "Recurring & scheduled", icon: Wallet2, desc: "Salary, transfers, repeating bills" },
+  { href: "/app/cards", label: "Credit cards", icon: CreditCard, desc: "Limits, statements, installments" },
   { href: "/app/categories", label: "Categories & tags", icon: FolderTree, desc: "Organise your spending" },
   { href: "/app/templates", label: "Templates", icon: LayoutTemplate, desc: "Reusable transactions" },
   { href: "/app/sync", label: "Sync & conflicts", icon: RefreshCw, desc: "Status, conflicts, failed changes" },

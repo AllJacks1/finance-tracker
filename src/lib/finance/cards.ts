@@ -146,8 +146,14 @@ export function computeStatement(
   const balance = computeBalances([card], txns, closing).get(card.id) ?? 0;
   const owed = outstandingOf(balance);
   const cardPlans = plans.filter((p) => p.cardAccountId === card.id);
-  const dates = new Map(txns.map((t) => [t.id, t.localDate]));
-  const unbilled = unbilledInstallments(cardPlans, profile, closing, (p) => (p.transactionId ? (dates.get(p.transactionId) ?? null) : null));
+  // Purchase date of each plan: from the purchase transaction linked to it.
+  const dates = new Map<string, ISODate>();
+  for (const t of txns) if (t.installmentPlanId && isLive(t)) dates.set(t.installmentPlanId, t.localDate);
+  for (const p of cardPlans) if (!dates.has(p.id) && p.transactionId) {
+    const t = txns.find((x) => x.id === p.transactionId);
+    if (t) dates.set(p.id, t.localDate);
+  }
+  const unbilled = unbilledInstallments(cardPlans, profile, closing, (p) => dates.get(p.id) ?? null);
   const statementBalance = Math.max(owed - unbilled, 0);
   const inst = Math.min(installmentsDueIn(cardPlans, profile, closing), statementBalance);
   return {
