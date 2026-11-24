@@ -7,6 +7,7 @@ import { CloudDownload, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useFinance, useSyncStatus, useVault } from "@/client/hooks";
 import { takeSnapshot } from "@/client/goal-actions";
+import { showLocalNotifications } from "@/client/notify";
 import { autoSnapshotDue } from "@/lib/finance/networth";
 import { vault } from "@/client/vault";
 import { cn } from "@/lib/utils";
@@ -59,6 +60,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {children}
           <FirstSyncBanner />
           <AutoSnapshot />
+          <LocalNotifications />
         </main>
         <BottomNav />
       </div>
@@ -120,6 +122,17 @@ function AutoSnapshot() {
   React.useEffect(() => {
     if (due) void takeSnapshot("auto", due).catch(() => {});
   }, [due]);
+  return null;
+}
+
+/** While the app is open, urgent reminders also appear as system notifications (once each). */
+function LocalNotifications() {
+  const f = useFinance();
+  const keys = f.notifications.map((n) => n.key).join("|");
+  React.useEffect(() => {
+    void showLocalNotifications(f.notifications);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keys]);
   return null;
 }
 

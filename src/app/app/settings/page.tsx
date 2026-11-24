@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/app/app-shell";
 import { Button } from "@/components/ui/button";
 import { Field, NativeSelect, Segmented } from "@/components/finance/primitives";
 import { ActionError, saveSettings } from "@/client/actions";
+import { savePreferences } from "@/client/goal-actions";
 import { useRecords, useSettings } from "@/client/hooks";
 
 const ZONES = ["Asia/Manila", "Asia/Singapore", "Asia/Hong_Kong", "Asia/Tokyo", "Asia/Dubai", "Europe/London", "America/Los_Angeles", "America/New_York", "Australia/Sydney", "UTC"];
@@ -50,6 +51,12 @@ function SettingsForm() {
         </Field>
         <Button onClick={() => void save()} disabled={!has}>Save</Button>
         {!has ? <p className="text-xs text-muted-foreground">Sync once to download your settings.</p> : null}
+        <Field label="Safe to Spend covers" htmlFor="sts" hint="How far ahead bills and scheduled payments are subtracted.">
+          <NativeSelect id="sts" value={s.preferences.stsHorizon} disabled={!has} onChange={(e) => void savePreferences({ stsHorizon: e.target.value as "end_of_month" | "next_income" }).then(() => toast.success("Saved")).catch((er) => toast.error(er instanceof ActionError ? er.message : "Couldn't save."))}>
+            <option value="end_of_month">Until the end of this month</option>
+            <option value="next_income">Until my next scheduled income (e.g. payday)</option>
+          </NativeSelect>
+        </Field>
         <Field label="Appearance">
           <Segmented value={(theme as "system" | "light" | "dark") ?? "system"} onChange={setTheme} options={[{ value: "system", label: "System" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }]} />
         </Field>

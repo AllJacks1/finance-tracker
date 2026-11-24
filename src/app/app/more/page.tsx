@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronRight, CreditCard, FileUp, HandCoins, TrendingUp, Download, FolderTree, Landmark, LayoutTemplate, LogOut, RefreshCw, Settings, Shield, ShieldCheck, Wallet2 } from "lucide-react";
+import { Bell, ChevronRight, CreditCard, FileUp, HandCoins, TrendingUp, Download, FolderTree, Landmark, LayoutTemplate, LogOut, RefreshCw, Settings, Shield, ShieldCheck, Wallet2 } from "lucide-react";
 import { PageHeader } from "@/components/app/app-shell";
 import { useSyncStatus, useVault } from "@/client/hooks";
 import { vault } from "@/client/vault";
@@ -26,6 +26,7 @@ const ITEMS = [
   { href: "/app/categories", label: "Categories & tags", icon: FolderTree, desc: "Organise your spending" },
   { href: "/app/templates", label: "Templates", icon: LayoutTemplate, desc: "Reusable transactions" },
   { href: "/app/sync", label: "Sync & conflicts", icon: RefreshCw, desc: "Status, conflicts, failed changes" },
+  { href: "/app/notifications", label: "Notifications", icon: Bell, desc: "Reminders and push on this device" },
   { href: "/app/security", label: "Security", icon: Shield, desc: "Offline PIN, devices, password" },
   { href: "/app/import", label: "Import CSV", icon: FileUp, desc: "Bank and e-wallet exports" },
   { href: "/app/export", label: "Export", icon: Download, desc: "CSV and full JSON export" },

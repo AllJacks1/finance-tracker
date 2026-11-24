@@ -14,7 +14,7 @@ import { generateTempPassword, hashPassword } from "../auth/password";
 import { revokeUserSessions } from "../auth/session";
 import type { AuthContext } from "../authz";
 import { db, type Tx } from "../db";
-import { adminPermissionGrants, devices, sessions, users } from "../db/schema";
+import { adminPermissionGrants, devices, pushSubscriptions, sessions, users } from "../db/schema";
 import { ApiError, forbidden, notFound } from "../http";
 
 /**
@@ -126,6 +126,7 @@ async function revokeAllDevices(tx: Tx, userId: string) {
     .update(devices)
     .set({ revokedAt: sql`now()`, recoveryKeyEnc: null })
     .where(and(eq(devices.userId, userId), isNull(devices.revokedAt)));
+  await tx.update(pushSubscriptions).set({ revokedAt: sql`now()` }).where(and(eq(pushSubscriptions.userId, userId), isNull(pushSubscriptions.revokedAt)));
   await revokeUserSessions(userId, undefined, tx);
 }
 
@@ -191,6 +192,7 @@ export async function userAction(
           .returning({ id: devices.id });
         if (!updated.length) throw notFound();
         await tx.update(sessions).set({ revokedAt: sql`now()` }).where(eq(sessions.deviceId, input.deviceId));
+        await tx.update(pushSubscriptions).set({ revokedAt: sql`now()` }).where(eq(pushSubscriptions.deviceId, input.deviceId));
         await audit({ ...base, action: "device.revoked", metadata: { deviceId: input.deviceId } }, tx);
         return {};
       }
@@ -236,6 +238,7 @@ export async function revokeOwnDevice(userId: string, deviceId: string, req: Req
     .returning({ id: devices.id });
   if (!updated.length) throw notFound();
   await db().update(sessions).set({ revokedAt: sql`now()` }).where(eq(sessions.deviceId, deviceId));
+  await db().update(pushSubscriptions).set({ revokedAt: sql`now()` }).where(eq(pushSubscriptions.deviceId, deviceId));
   await audit({ action: "device.revoked", actorUserId: userId, targetUserId: userId, metadata: { deviceId }, req });
 }
 

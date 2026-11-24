@@ -7,6 +7,7 @@
  *  - "locked"      local data exists and is encrypted; PIN (offline) or password (online) needed
  *  - "unlocked"    data key in memory; store + sync engine running
  */
+import { disablePush } from "./notify";
 import type { Role } from "@/lib/permissions";
 import { api, ApiCallError } from "./api";
 import {
@@ -368,6 +369,9 @@ class Vault {
 
   async logout(opts: { removeLocalData: boolean }) {
     const userId = this.state.user?.id;
+    // Push belongs to the signed-in user: stop it before the session ends, so the next person
+    // using this browser never receives this user's reminders.
+    await disablePush().catch(() => {});
     try {
       await api("/api/auth/logout", { body: {} });
     } catch {
@@ -387,6 +391,7 @@ class Vault {
 
   private async handleRevoked() {
     const userId = this.state.user?.id;
+    void disablePush().catch(() => {}); // server already revoked it; drop the browser subscription too
     this.engine?.stop();
     this.store?.close();
     this.engine = null;

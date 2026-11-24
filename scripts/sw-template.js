@@ -86,3 +86,41 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+
+// ---------------------------------------------------------------- notifications
+// Web Push reminders (opt-in). The payload is end-to-end encrypted to this device.
+self.addEventListener("push", (event) => {
+  let data = { title: "Finance Tracker", body: "You have reminders.", url: "/app", tag: "ft" };
+  try {
+    data = { ...data, ...(event.data ? event.data.json() : {}) };
+  } catch {
+    /* keep defaults */
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      tag: data.tag,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      data: { url: data.url },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/app";
+  event.waitUntil(
+    (async () => {
+      const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      for (const c of all) {
+        if (new URL(c.url).origin === self.location.origin) {
+          await c.focus();
+          if ("navigate" in c) await c.navigate(url);
+          return;
+        }
+      }
+      await self.clients.openWindow(url);
+    })(),
+  );
+});
