@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/finance/primitives";
 import { api, ApiCallError } from "@/client/api";
-import { useVault } from "@/client/hooks";
+import { useOnline, useVault } from "@/client/hooks";
 import { vault } from "@/client/vault";
 
 export default function LoginPage() {
@@ -26,10 +26,9 @@ function Login() {
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState("");
-  const [online, setOnline] = React.useState(true);
+  const online = useOnline();
 
   React.useEffect(() => {
-    setOnline(navigator.onLine);
     api<{ setupComplete: boolean; loginNotice: string }>("/api/setup", { timeoutMs: 5000 })
       .then((r) => {
         if (!r.setupComplete) router.replace("/setup");

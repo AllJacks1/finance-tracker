@@ -17,6 +17,22 @@ export function useVault(): VaultState {
 }
 
 const noop = () => () => {};
+
+/** navigator.onLine as React state. */
+export function useOnline(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      window.addEventListener("online", cb);
+      window.addEventListener("offline", cb);
+      return () => {
+        window.removeEventListener("online", cb);
+        window.removeEventListener("offline", cb);
+      };
+    },
+    () => navigator.onLine,
+    () => true,
+  );
+}
 const zero = () => 0;
 
 /** Re-renders whenever local data changes. */
@@ -55,13 +71,13 @@ export function useSettings(): WorkspaceSettings {
 /** Today's date in the workspace timezone; refreshes every minute so it rolls over at midnight. */
 export function useToday(): string {
   const { timezone } = useSettings();
-  const [today, setToday] = useState(() => todayIn(timezone));
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    setToday(todayIn(timezone));
-    const t = setInterval(() => setToday(todayIn(timezone)), 60_000);
+    const t = setInterval(() => setTick((n) => n + 1), 60_000);
     return () => clearInterval(t);
-  }, [timezone]);
-  return today;
+  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => todayIn(timezone), [timezone, tick]);
 }
 
 const data = <T,>(rs: { data: T; deletedAt: string | null }[]) => rs.map((r) => ({ ...r.data, deletedAt: r.deletedAt }));

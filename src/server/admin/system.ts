@@ -65,7 +65,12 @@ export async function systemHealth() {
       errors: Number(sync?.errors ?? 0),
       recentFailures,
     },
-    backups: { last: lastBackup ?? null, lastSuccess: lastSuccess ?? null, storageConfigured: storageConfigured() },
+    backups: {
+      last: lastBackup ?? null,
+      lastSuccess: lastSuccess ?? null,
+      recentSuccess: !!lastSuccess && Date.now() - new Date(lastSuccess.startedAt).getTime() < 36 * 3600_000,
+      storageConfigured: storageConfigured(),
+    },
     version: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? process.env.npm_package_version ?? "dev",
   };
 }

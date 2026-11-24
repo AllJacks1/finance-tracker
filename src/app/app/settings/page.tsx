@@ -13,11 +13,16 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 
 export default function SettingsPage() {
   const s = useSettings();
+  // Remount the form when synced settings change, instead of copying props into state in an effect.
+  return <SettingsForm key={`${s.id}-${s.timezone}-${s.weekStart}`} />;
+}
+
+function SettingsForm() {
+  const s = useSettings();
   const has = useRecords("settings").length > 0;
   const { theme, setTheme } = useTheme();
   const [tz, setTz] = React.useState(s.timezone);
   const [week, setWeek] = React.useState(s.weekStart);
-  React.useEffect(() => { setTz(s.timezone); setWeek(s.weekStart); }, [s.timezone, s.weekStart]);
 
   const save = async () => {
     try {

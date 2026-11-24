@@ -1,6 +1,7 @@
 "use client";
 import * as React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +10,7 @@ import { vault } from "@/client/vault";
 
 export function LockScreen() {
   const state = useVault();
+  const router = useRouter();
   const [pin, setPin] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -67,7 +69,7 @@ export function LockScreen() {
         <Link href="/login?resume=1" className="text-primary underline-offset-4 hover:underline">
           Forgot PIN? Sign in with your password
         </Link>
-        <button type="button" className="text-muted-foreground" onClick={() => void vault.logout({ removeLocalData: false }).then(() => location.assign("/login"))}>
+        <button type="button" className="text-muted-foreground" onClick={() => void vault.logout({ removeLocalData: false }).then(() => router.replace("/login"))}>
           Use a different account
         </button>
       </div>

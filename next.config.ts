@@ -8,7 +8,9 @@ const isDev = process.env.NODE_ENV !== "production";
 // 'unsafe-inline' is required for scripts. Everything else is locked to 'self'.
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  // 'wasm-unsafe-eval' allows compiling WebAssembly only (Argon2id for the offline PIN); it does
+  // not allow eval() of JavaScript.
+  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' blob: data:",
   "font-src 'self' data:",

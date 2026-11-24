@@ -10,12 +10,13 @@
 import type { Role } from "@/lib/permissions";
 import { api, ApiCallError } from "./api";
 import {
+  decryptBytes,
+  deriveKekFromPin,
   importAesKey,
   newRawKey,
   PIN_MAX_FAILURES,
   pinLockoutMs,
   pinProblem,
-  unwrapWithPin,
   unwrapWithRecovery,
   wrapWithPin,
   wrapWithRecovery,
@@ -99,6 +100,8 @@ class Vault {
   }
 
   private async doInit() {
+    // Already signed in and unlocked in this page (e.g. right after login): nothing to do.
+    if (this.state.phase === "unlocked" && this.store) return;
     const known = await getDeviceDb().users.orderBy("lastUsedAt").reverse().toArray();
     const last = known[0];
     let me: MeResponse | null = null;
@@ -183,6 +186,7 @@ class Vault {
     const me = await api<MeResponse>("/api/auth/me");
     this.set({ permissions: me.permissions });
     await this.unlockWithRecovery(res.user, res.recoveryKey);
+    this.initPromise = Promise.resolve();
     return { mustChangePassword: false };
   }
 
@@ -216,8 +220,12 @@ class Vault {
   private async openStore(userId: string, db: UserDB, raw: Uint8Array) {
     const dek = await importAesKey(raw);
     raw.fill(0);
+    // Let any sync still running against the previous store finish (it aborts promptly once its
+    // store is closed) so it can't write data the new store has already loaded past.
+    const previous = this.engine;
     this.store?.close();
-    this.engine?.stop();
+    previous?.stop();
+    await previous?.idle();
     this.store = new WorkspaceStore(db, dek, userId);
     await this.store.load();
     this.engine = new SyncEngine(this.store, this.readConnection, (code) => {
@@ -238,16 +246,16 @@ class Vault {
     if (Date.now() < lockedUntil) return { ok: false, error: "Too many attempts. Wait and try again." };
     const wraps = (await db.meta.get("keyWraps"))?.value as KeyWraps | undefined;
     if (!wraps?.pin) return { ok: false, error: "PIN is not set on this device. Sign in online." };
+    // Derive the key first: a failure here (e.g. WebAssembly unavailable) is NOT a wrong PIN.
+    let kek: CryptoKey;
     try {
-      const raw = await unwrapWithPin(wraps.pin, pin);
-      await db.meta.bulkPut([
-        { key: "pinFailures", value: 0 },
-        { key: "pinLockedUntil", value: 0 },
-      ]);
-      await getDeviceDb().users.update(user.id, { lastUsedAt: new Date().toISOString() });
-      this.set({ pinFailures: 0, pinLockedUntil: 0 });
-      await this.openStore(user.id, db, raw);
-      return { ok: true };
+      kek = await deriveKekFromPin(pin, wraps.pin.salt, wraps.pin.kdf);
+    } catch {
+      return { ok: false, error: "This browser couldn't process the PIN. Sign in online instead." };
+    }
+    let raw: Uint8Array;
+    try {
+      raw = await decryptBytes(kek, wraps.pin);
     } catch {
       const failures = (((await db.meta.get("pinFailures"))?.value as number) ?? 0) + 1;
       const until = Date.now() + pinLockoutMs(failures);
@@ -263,6 +271,14 @@ class Vault {
       this.set({ pinFailures: failures, pinLockedUntil: until });
       return { ok: false, error: "Incorrect PIN." };
     }
+    await db.meta.bulkPut([
+      { key: "pinFailures", value: 0 },
+      { key: "pinLockedUntil", value: 0 },
+    ]);
+    await getDeviceDb().users.update(user.id, { lastUsedAt: new Date().toISOString() });
+    this.set({ pinFailures: 0, pinLockedUntil: 0 });
+    await this.openStore(user.id, db, raw);
+    return { ok: true };
   }
 
   /**
@@ -285,9 +301,14 @@ class Vault {
     }
     const db = await this.openDb(user.id);
     const wraps = (await db.meta.get("keyWraps"))!.value as KeyWraps;
-    const raw = await unwrapWithRecovery(wraps.recovery, recoveryKey);
-    const pinWrap = await wrapWithPin(raw, pin);
-    raw.fill(0);
+    let pinWrap;
+    try {
+      const raw = await unwrapWithRecovery(wraps.recovery, recoveryKey);
+      pinWrap = await wrapWithPin(raw, pin);
+      raw.fill(0);
+    } catch {
+      return { ok: false, error: "This browser couldn't secure the PIN." };
+    }
     await db.meta.put({ key: "keyWraps", value: { ...wraps, pin: pinWrap } satisfies KeyWraps });
     await db.meta.bulkPut([
       { key: "pinFailures", value: 0 },

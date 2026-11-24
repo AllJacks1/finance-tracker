@@ -8,7 +8,7 @@ export default async function AdminOverview() {
   if (!auth) redirect("/login");
   if (!auth.permissions.has("system.health")) redirect(auth.permissions.has("users.view") ? "/admin/users" : "/app");
   const h = await systemHealth();
-  const backupOk = h.backups.lastSuccess && Date.now() - new Date(h.backups.lastSuccess.startedAt).getTime() < 36 * 3600_000;
+  const backupOk = h.backups.recentSuccess;
   return (
     <div className="grid gap-6">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

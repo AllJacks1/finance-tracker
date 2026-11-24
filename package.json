@@ -20,7 +20,8 @@
     "backup": "tsx scripts/backup.ts",
     "backup:restore": "tsx scripts/restore.ts",
     "format": "prettier --write .",
-    "db:local-setup": "tsx scripts/local-db-setup.ts"
+    "db:local-setup": "tsx scripts/local-db-setup.ts",
+    "backup:keygen": "tsx scripts/backup-keygen.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1176.0",

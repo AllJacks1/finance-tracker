@@ -15,7 +15,7 @@ export default async function BackupsPage() {
       <div className="grid gap-1 rounded-xl bg-muted/60 p-3 text-sm text-muted-foreground">
         <p>A scheduled job (the Railway <code>backup</code> service) makes an encrypted backup of the whole database every day and uploads it to object storage. Backups are encrypted with a public key; only the holder of the private key can restore them.</p>
         <p>To run one now: in Railway, open the <code>backup</code> service and click <b>Run now</b>, or run <code>railway run npm run backup</code>. Restore steps are in <code>docs/RECOVERY.md</code>.</p>
-        {!storageConfigured() ? <p className="text-warning">Object storage is not configured on the web service (that's fine if only the backup service has it).</p> : null}
+        {!storageConfigured() ? <p className="text-warning">Object storage is not configured on the web service (that&apos;s fine if only the backup service has it).</p> : null}
       </div>
       <div className="overflow-x-auto rounded-xl border">
         <table className="w-full text-sm">

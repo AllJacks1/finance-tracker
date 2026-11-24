@@ -4,16 +4,8 @@ import { z, ZodError, type ZodType } from "zod";
 import { env } from "./env";
 import { log } from "./log";
 
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message?: string,
-    public details?: unknown,
-  ) {
-    super(message ?? code);
-  }
-}
+import { ApiError } from "./errors";
+export { ApiError };
 
 export const unauthorized = (code = "unauthorized") => new ApiError(401, code, "Please sign in");
 export const forbidden = (code = "forbidden") => new ApiError(403, code, "Not allowed");

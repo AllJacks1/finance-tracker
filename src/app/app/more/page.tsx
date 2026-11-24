@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ChevronRight, Download, FolderTree, Landmark, LayoutTemplate, LogOut, RefreshCw, Settings, Shield, ShieldCheck, Wallet2 } from "lucide-react";
 import { PageHeader } from "@/components/app/app-shell";
 import { useSyncStatus, useVault } from "@/client/hooks";
@@ -30,6 +31,7 @@ const ITEMS = [
 export default function MorePage() {
   const v = useVault();
   const s = useSyncStatus();
+  const router = useRouter();
   const pending = (s?.pending ?? 0) + (s?.failed ?? 0) + (s?.conflicts ?? 0);
   return (
     <>
@@ -80,8 +82,8 @@ export default function MorePage() {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={() => void vault.logout({ removeLocalData: false }).then(() => location.assign("/login"))}>Sign out, keep encrypted data</AlertDialogAction>
-              <AlertDialogAction className="bg-destructive text-white" onClick={() => void vault.logout({ removeLocalData: true }).then(() => location.assign("/login"))}>Sign out and remove data</AlertDialogAction>
+              <AlertDialogAction onClick={() => void vault.logout({ removeLocalData: false }).then(() => router.replace("/login"))}>Sign out, keep encrypted data</AlertDialogAction>
+              <AlertDialogAction className="bg-destructive text-white" onClick={() => void vault.logout({ removeLocalData: true }).then(() => router.replace("/login"))}>Sign out and remove data</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

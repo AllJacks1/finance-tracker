@@ -210,8 +210,14 @@ export class SyncEngine {
     return this.running;
   }
 
+  /** Resolves when no sync is running. */
+  async idle() {
+    await this.running?.catch(() => {});
+  }
+
   /** Re-check the network between batches; stop if automatic sync is no longer allowed. */
   private checkStillAllowed(manual: boolean) {
+    if (this.store.isClosed) throw new PausedError();
     const c = evaluateConnection(this.readConn());
     if (c.status === "offline" || (!manual && !c.autoSyncAllowed)) throw new PausedError();
   }
@@ -288,6 +294,7 @@ export class SyncEngine {
     for (let page = 0; page < 10_000; page++) {
       this.checkStillAllowed(manual);
       const res = await api<PullResponse>(`/api/sync/pull?cursor=${cursor}&limit=${PULL_PAGE}`, { timeoutMs: 60_000 });
+      if (this.store.isClosed) throw new PausedError();
       for (const rec of res.records) await this.store.applyServerRecord(rec);
       cursor = res.cursor;
       await this.store.setMeta("cursor", cursor);
