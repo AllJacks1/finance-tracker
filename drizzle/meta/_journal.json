@@ -29,6 +29,13 @@
       "when": 1795541269102,
       "tag": "0003_phase2_security",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795542215245,
+      "tag": "0004_phase2_data",
+      "breakpoints": true
     }
   ]
 }
