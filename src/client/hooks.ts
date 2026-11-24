@@ -11,6 +11,7 @@ import { computeSafeToSpend } from "@/lib/finance/safe-to-spend";
 import type { LocalRecord } from "./store";
 import type { SyncStatus } from "./sync-engine";
 import { vault, type VaultState } from "./vault";
+import { DEFAULT_SETTINGS, withPreferences } from "./settings";
 
 export function useVault(): VaultState {
   return useSyncExternalStore(vault.subscribe, vault.getState, vault.getState);
@@ -61,11 +62,11 @@ export function useSyncStatus(): SyncStatus | null {
   return useSyncExternalStore(engine?.subscribe ?? noop, engine?.getStatus ?? (() => OFFLINE_STATUS), () => OFFLINE_STATUS);
 }
 
-export const DEFAULT_SETTINGS: WorkspaceSettings = { id: "", currency: "PHP", timezone: "Asia/Manila", weekStart: 1 };
+export { DEFAULT_SETTINGS };
 
 export function useSettings(): WorkspaceSettings {
   const s = useRecords("settings");
-  return s[0]?.data ?? DEFAULT_SETTINGS;
+  return useMemo(() => withPreferences(s[0]?.data), [s]);
 }
 
 /** Today's date in the workspace timezone; refreshes every minute so it rolls over at midnight. */

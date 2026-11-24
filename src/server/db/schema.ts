@@ -223,6 +223,8 @@ export const workspaces = pgTable("workspaces", {
   changeCounter: bigint("change_counter", { mode: "number" }).notNull().default(0),
   version: integer("version").notNull().default(1),
   changeSeq: bigint("change_seq", { mode: "number" }).notNull().default(0),
+  /** Phase 2: synced user preferences (Safe-to-Spend horizon, notifications, emergency fund). */
+  preferences: jsonb("preferences").notNull().default({}),
   createdAt: ts("created_at").notNull().defaultNow(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });
@@ -271,7 +273,9 @@ export const categories = pgTable(
     icon: text("icon"),
     color: text("color"),
     isArchived: boolean("is_archived").notNull().default(false),
-    parentId: uuid("parent_id"), // reserved for Phase 2 sub-categories
+    parentId: uuid("parent_id"), // reserved for sub-categories
+    /** Phase 2: counts toward essential monthly expenses (emergency-fund coverage). */
+    isEssential: boolean("is_essential").notNull().default(false),
   },
   (t) => [
     unique("categories_ws_id_uq").on(t.workspaceId, t.id),
@@ -315,6 +319,156 @@ export const allocations = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------------------------------------
+// Phase 2 - planning modules. These are METADATA layers: money moves only through transactions.
+// Kinds/statuses are text validated by the shared zod schemas (easier to extend than pg enums).
+// ---------------------------------------------------------------------------------------------
+
+/** Debts & loans. 1:1 with a `loan` liability account (outstanding = -account balance). */
+export const debts = pgTable(
+  "debts",
+  {
+    ...synced(),
+    accountId: uuid("account_id").notNull(),
+    creditor: text("creditor").notNull(),
+    kind: text("kind").notNull(), // personal | bank | installment | other
+    originalPrincipal: money("original_principal").notNull(),
+    startDate: date("start_date", { mode: "string" }).notNull(),
+    aprBp: integer("apr_bp").notNull().default(0), // annual rate in basis points
+    interestMethod: text("interest_method").notNull().default("diminishing"), // diminishing | add_on | none
+    frequency: text("frequency").notNull().default("monthly"), // weekly | biweekly | monthly
+    minimumPayment: money("minimum_payment").notNull().default(0),
+    dueDay: integer("due_day"),
+    termMonths: integer("term_months"),
+    status: text("status").notNull().default("active"), // active | paid_off | archived
+    notes: text("notes"),
+  },
+  (t) => [
+    unique("debts_ws_id_uq").on(t.workspaceId, t.id),
+    index("debts_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+    uniqueIndex("debts_account_uq").on(t.workspaceId, t.accountId).where(sql`deleted_at is null`),
+    foreignKey({ name: "debts_account_fk", columns: [t.workspaceId, t.accountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+    check("debts_principal_nonneg", sql`${t.originalPrincipal} >= 0`),
+  ],
+);
+
+/**
+ * Recurring / one-time schedules. Occurrences are COMPUTED from the rule (never generated in the
+ * background); only confirmed/paid/skipped/edited occurrences become records, with deterministic ids.
+ */
+export const schedules = pgTable(
+  "schedules",
+  {
+    ...synced(),
+    kind: text("kind").notNull(), // transaction | bill
+    name: text("name").notNull(),
+    txnType: text("txn_type").notNull(), // income | expense | transfer
+    amount: money("amount").notNull(),
+    accountId: uuid("account_id"),
+    toAccountId: uuid("to_account_id"),
+    categoryId: uuid("category_id"),
+    description: text("description"),
+    notes: text("notes"),
+    tagIds: uuid("tag_ids").array().notNull().default(sql`'{}'::uuid[]`),
+    rule: jsonb("rule").notNull(), // { freq, interval, startDate, endDate, count }
+    pauses: jsonb("pauses").notNull().default([]), // [{ from, to|null }]
+    status: text("status").notNull().default("active"), // active | paused | cancelled
+    billKind: text("bill_kind"), // general | card_payment | loan_installment (kind = bill)
+    cardAccountId: uuid("card_account_id"),
+    debtId: uuid("debt_id"),
+    paysBillScheduleId: uuid("pays_bill_schedule_id"),
+    reminderDays: integer("reminder_days"),
+    previousScheduleId: uuid("previous_schedule_id"),
+  },
+  (t) => [
+    unique("schedules_ws_id_uq").on(t.workspaceId, t.id),
+    index("schedules_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+    foreignKey({ name: "schedules_account_fk", columns: [t.workspaceId, t.accountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+    foreignKey({ name: "schedules_to_account_fk", columns: [t.workspaceId, t.toAccountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+    foreignKey({ name: "schedules_card_fk", columns: [t.workspaceId, t.cardAccountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+    foreignKey({ name: "schedules_category_fk", columns: [t.workspaceId, t.categoryId], foreignColumns: [categories.workspaceId, categories.id] }),
+    foreignKey({ name: "schedules_debt_fk", columns: [t.workspaceId, t.debtId], foreignColumns: [debts.workspaceId, debts.id] }),
+    check("schedules_amount_positive", sql`${t.amount} > 0`),
+  ],
+);
+
+/** Bills: one obligation instance. Paid/partial/overdue status is DERIVED from linked payments. */
+export const bills = pgTable(
+  "bills",
+  {
+    ...synced(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull().default("general"), // general | card_payment | loan_installment
+    categoryId: uuid("category_id"),
+    expectedAmount: money("expected_amount").notNull(),
+    actualAmount: money("actual_amount"),
+    minimumAmount: money("minimum_amount"),
+    dueDate: date("due_date", { mode: "string" }).notNull(),
+    accountId: uuid("account_id"), // payment account
+    notes: text("notes"),
+    scheduleId: uuid("schedule_id"),
+    occurrenceDate: date("occurrence_date", { mode: "string" }),
+    cardAccountId: uuid("card_account_id"),
+    debtId: uuid("debt_id"),
+    statementClosingDate: date("statement_closing_date", { mode: "string" }),
+    cancelled: boolean("cancelled").notNull().default(false),
+  },
+  (t) => [
+    unique("bills_ws_id_uq").on(t.workspaceId, t.id),
+    index("bills_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+    index("bills_ws_due_idx").on(t.workspaceId, t.dueDate),
+    uniqueIndex("bills_occurrence_uq").on(t.workspaceId, t.scheduleId, t.occurrenceDate).where(sql`schedule_id is not null`),
+    foreignKey({ name: "bills_category_fk", columns: [t.workspaceId, t.categoryId], foreignColumns: [categories.workspaceId, categories.id] }),
+    foreignKey({ name: "bills_account_fk", columns: [t.workspaceId, t.accountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+    foreignKey({ name: "bills_card_fk", columns: [t.workspaceId, t.cardAccountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+    foreignKey({ name: "bills_schedule_fk", columns: [t.workspaceId, t.scheduleId], foreignColumns: [schedules.workspaceId, schedules.id] }),
+    foreignKey({ name: "bills_debt_fk", columns: [t.workspaceId, t.debtId], foreignColumns: [debts.workspaceId, debts.id] }),
+    check("bills_expected_nonneg", sql`${t.expectedAmount} >= 0`),
+    check("bills_actual_nonneg", sql`${t.actualAmount} IS NULL OR ${t.actualAmount} >= 0`),
+  ],
+);
+
+/** Credit-card installment plans (e.g. 0% 12 months): only the monthly amount is billed. */
+export const installmentPlans = pgTable(
+  "installment_plans",
+  {
+    ...synced(),
+    cardAccountId: uuid("card_account_id").notNull(),
+    transactionId: uuid("transaction_id"), // the purchase (validated by the app)
+    description: text("description").notNull(),
+    principal: money("principal").notNull(),
+    months: integer("months").notNull(),
+    monthlyAmount: money("monthly_amount").notNull(),
+    firstBillingDate: date("first_billing_date", { mode: "string" }).notNull(),
+    feeAmount: money("fee_amount").notNull().default(0),
+    status: text("status").notNull().default("active"), // active | cancelled
+  },
+  (t) => [
+    unique("installments_ws_id_uq").on(t.workspaceId, t.id),
+    index("installments_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+    foreignKey({ name: "installments_card_fk", columns: [t.workspaceId, t.cardAccountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+    check("installments_positive", sql`${t.principal} > 0 AND ${t.months} > 0 AND ${t.monthlyAmount} > 0`),
+  ],
+);
+
+export const importBatches = pgTable(
+  "import_batches",
+  {
+    ...synced(),
+    accountId: uuid("account_id").notNull(),
+    filename: text("filename").notNull(),
+    fileSha256: text("file_sha256").notNull(),
+    rowCount: integer("row_count").notNull(),
+    importedCount: integer("imported_count").notNull(),
+    skippedCount: integer("skipped_count").notNull(),
+  },
+  (t) => [
+    unique("imports_ws_id_uq").on(t.workspaceId, t.id),
+    index("imports_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+    foreignKey({ name: "imports_account_fk", columns: [t.workspaceId, t.accountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+  ],
+);
+
 export const transactions = pgTable(
   "transactions",
   {
@@ -332,7 +486,17 @@ export const transactions = pgTable(
     notes: text("notes"),
     tagIds: uuid("tag_ids").array().notNull().default(sql`'{}'::uuid[]`),
     refundOfId: uuid("refund_of_id"),
+    /** Deprecated in Phase 2 (obligations became bills); kept for existing rows. */
     allocationId: uuid("allocation_id"),
+    // Phase 2 links (all optional)
+    billId: uuid("bill_id"),
+    scheduleId: uuid("schedule_id"),
+    occurrenceDate: date("occurrence_date", { mode: "string" }),
+    debtId: uuid("debt_id"),
+    installmentPlanId: uuid("installment_plan_id"),
+    groupId: uuid("group_id"),
+    importBatchId: uuid("import_batch_id"),
+    importFingerprint: text("import_fingerprint"),
   },
   (t) => [
     unique("transactions_ws_id_uq").on(t.workspaceId, t.id),
@@ -358,6 +522,15 @@ export const transactions = pgTable(
       columns: [t.workspaceId, t.allocationId],
       foreignColumns: [allocations.workspaceId, allocations.id],
     }),
+    foreignKey({ name: "transactions_bill_fk", columns: [t.workspaceId, t.billId], foreignColumns: [bills.workspaceId, bills.id] }),
+    foreignKey({ name: "transactions_schedule_fk", columns: [t.workspaceId, t.scheduleId], foreignColumns: [schedules.workspaceId, schedules.id] }),
+    foreignKey({ name: "transactions_debt_fk", columns: [t.workspaceId, t.debtId], foreignColumns: [debts.workspaceId, debts.id] }),
+    foreignKey({ name: "transactions_installment_fk", columns: [t.workspaceId, t.installmentPlanId], foreignColumns: [installmentPlans.workspaceId, installmentPlans.id] }),
+    foreignKey({ name: "transactions_import_fk", columns: [t.workspaceId, t.importBatchId], foreignColumns: [importBatches.workspaceId, importBatches.id] }),
+    // Duplicate prevention: one transaction per schedule occurrence, one per imported row.
+    uniqueIndex("transactions_occurrence_uq").on(t.workspaceId, t.scheduleId, t.occurrenceDate).where(sql`schedule_id is not null`),
+    uniqueIndex("transactions_import_fp_uq").on(t.workspaceId, t.accountId, t.importFingerprint).where(sql`import_fingerprint is not null`),
+    index("transactions_ws_bill_idx").on(t.workspaceId, t.billId),
     check("transactions_amount_positive", sql`${t.amount} > 0`),
     check(
       "transactions_transfer_shape",
@@ -500,7 +673,8 @@ export const attachments = pgTable(
   "attachments",
   {
     ...synced(),
-    transactionId: uuid("transaction_id").notNull(),
+    transactionId: uuid("transaction_id"),
+    billId: uuid("bill_id"),
     objectKey: text("object_key").notNull(),
     filename: text("filename").notNull(),
     mime: text("mime").notNull(),
@@ -515,7 +689,163 @@ export const attachments = pgTable(
       columns: [t.workspaceId, t.transactionId],
       foreignColumns: [transactions.workspaceId, transactions.id],
     }),
+    foreignKey({ name: "attachments_bill_fk", columns: [t.workspaceId, t.billId], foreignColumns: [bills.workspaceId, bills.id] }),
+    check("attachments_one_owner", sql`(${t.transactionId} IS NULL) <> (${t.billId} IS NULL)`),
   ],
+);
+
+export const scheduleExceptions = pgTable(
+  "schedule_exceptions",
+  {
+    ...synced(),
+    scheduleId: uuid("schedule_id").notNull(),
+    occurrenceDate: date("occurrence_date", { mode: "string" }).notNull(),
+    action: text("action").notNull(), // skip | override
+    overrideDate: date("override_date", { mode: "string" }),
+    overrideAmount: money("override_amount"),
+  },
+  (t) => [
+    unique("sched_exc_ws_id_uq").on(t.workspaceId, t.id),
+    index("sched_exc_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+    uniqueIndex("sched_exc_occurrence_uq").on(t.workspaceId, t.scheduleId, t.occurrenceDate),
+    foreignKey({ name: "sched_exc_schedule_fk", columns: [t.workspaceId, t.scheduleId], foreignColumns: [schedules.workspaceId, schedules.id] }),
+  ],
+);
+
+/** Credit-card details, 1:1 with a `credit_card` account. */
+export const cardProfiles = pgTable(
+  "card_profiles",
+  {
+    ...synced(),
+    accountId: uuid("account_id").notNull(),
+    creditLimit: money("credit_limit").notNull(),
+    statementDay: integer("statement_day").notNull(),
+    dueDaysAfterStatement: integer("due_days_after_statement").notNull().default(21),
+    minPaymentPctBp: integer("min_payment_pct_bp").notNull().default(300),
+    minPaymentFloor: money("min_payment_floor").notNull().default(50_000),
+    aprBp: integer("apr_bp").notNull().default(0),
+    autoBills: boolean("auto_bills").notNull().default(true),
+  },
+  (t) => [
+    unique("cards_ws_id_uq").on(t.workspaceId, t.id),
+    index("cards_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+    uniqueIndex("cards_account_uq").on(t.workspaceId, t.accountId).where(sql`deleted_at is null`),
+    foreignKey({ name: "cards_account_fk", columns: [t.workspaceId, t.accountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+    check("cards_statement_day", sql`${t.statementDay} BETWEEN 1 AND 31`),
+  ],
+);
+
+export const goals = pgTable(
+  "goals",
+  {
+    ...synced(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull().default("general"),
+    targetAmount: money("target_amount").notNull(),
+    targetDate: date("target_date", { mode: "string" }),
+    accountId: uuid("account_id"),
+    description: text("description"),
+    status: text("status").notNull().default("active"), // active | completed | archived
+    completedAt: date("completed_at", { mode: "string" }),
+  },
+  (t) => [
+    unique("goals_ws_id_uq").on(t.workspaceId, t.id),
+    index("goals_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+    foreignKey({ name: "goals_account_fk", columns: [t.workspaceId, t.accountId], foreignColumns: [accounts.workspaceId, accounts.id] }),
+    check("goals_target_nonneg", sql`${t.targetAmount} >= 0`),
+  ],
+);
+
+/** Goal contributions (+) and withdrawals (-). Earmarks only: never ledger entries. */
+export const goalEntries = pgTable(
+  "goal_entries",
+  {
+    ...synced(),
+    goalId: uuid("goal_id").notNull(),
+    amount: money("amount").notNull(),
+    entryDate: date("entry_date", { mode: "string" }).notNull(),
+    note: text("note"),
+    transactionId: uuid("transaction_id"),
+    groupId: uuid("group_id"),
+  },
+  (t) => [
+    unique("goal_entries_ws_id_uq").on(t.workspaceId, t.id),
+    index("goal_entries_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+    foreignKey({ name: "goal_entries_goal_fk", columns: [t.workspaceId, t.goalId], foreignColumns: [goals.workspaceId, goals.id] }),
+    foreignKey({ name: "goal_entries_txn_fk", columns: [t.workspaceId, t.transactionId], foreignColumns: [transactions.workspaceId, transactions.id] }),
+    check("goal_entries_nonzero", sql`${t.amount} <> 0`),
+  ],
+);
+
+/** Manually valued assets (investments, property, vehicles...) for net worth. */
+export const manualAssets = pgTable(
+  "manual_assets",
+  {
+    ...synced(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull().default("other"),
+    valuations: jsonb("valuations").notNull(), // [{ date, value }] ascending
+    isActive: boolean("is_active").notNull().default(true),
+    notes: text("notes"),
+  },
+  (t) => [
+    unique("assets_ws_id_uq").on(t.workspaceId, t.id),
+    index("assets_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+  ],
+);
+
+/** Net-worth snapshots. IMMUTABLE: the sync layer refuses updates. */
+export const netWorthSnapshots = pgTable(
+  "net_worth_snapshots",
+  {
+    ...synced(),
+    snapshotDate: date("snapshot_date", { mode: "string" }).notNull(),
+    kind: text("kind").notNull(), // auto | manual
+    assets: money("assets").notNull(),
+    liabilities: money("liabilities").notNull(),
+    netWorth: money("net_worth").notNull(),
+    breakdown: jsonb("breakdown").notNull(),
+    recordedAt: ts("recorded_at").notNull(),
+  },
+  (t) => [
+    unique("snapshots_ws_id_uq").on(t.workspaceId, t.id),
+    index("snapshots_ws_seq_idx").on(t.workspaceId, t.changeSeq),
+  ],
+);
+
+// ---------------------------------------------------------------------------------------------
+// Phase 2 - notifications (user/device scoped; no financial amounts stored)
+// ---------------------------------------------------------------------------------------------
+export const pushSubscriptions = pgTable(
+  "push_subscriptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    deviceId: uuid("device_id").references(() => devices.id),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    createdAt: ts("created_at").notNull().defaultNow(),
+    lastSuccessAt: ts("last_success_at"),
+    failedCount: integer("failed_count").notNull().default(0),
+    revokedAt: ts("revoked_at"),
+  },
+  (t) => [uniqueIndex("push_endpoint_uq").on(t.endpoint), index("push_user_idx").on(t.userId)],
+);
+
+/** Which reminders were already pushed (dedupe). Keys reference ids and dates only. */
+export const notificationLog = pgTable(
+  "notification_log",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    key: text("key").notNull(),
+    sentAt: ts("sent_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.key] })],
 );
 
 /** Idempotency ledger: every applied sync op is recorded with its result. */

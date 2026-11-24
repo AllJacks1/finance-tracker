@@ -10,7 +10,7 @@ import { AmountInput, Field, FormSheet, NativeSelect, Segmented } from "./primit
 import { ActionError, duplicateTransaction, newId, remove, restore, saveTag, saveTemplate, saveTransaction } from "@/client/actions";
 import { useFinance, useRecord } from "@/client/hooks";
 import { vault } from "@/client/vault";
-import type { Transaction, TxnType } from "@/lib/domain/types";
+import { pickTxnLinks, type Transaction, type TxnType } from "@/lib/domain/types";
 import { currentProgress, crossedThreshold } from "@/lib/finance/budgets";
 import { formatPHP, type Centavos } from "@/lib/finance/money";
 import { cn } from "@/lib/utils";
@@ -152,6 +152,8 @@ function TransactionSheet({
         notes: notes.trim() || null,
         tagIds,
         refundOfId: type === "refund" ? refundOfId || null : null,
+        // Keep Phase 2 links (bill, schedule, debt, import…) of an existing transaction.
+        ...pickTxnLinks(base),
         allocationId: type === "expense" || type === "transfer" ? allocationId || null : null,
       };
       await saveTransaction(data);

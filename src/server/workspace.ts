@@ -51,6 +51,7 @@ export async function ensureWorkspace(userId: string): Promise<string> {
         kind: c.kind,
         icon: c.icon,
         color: c.color,
+        isEssential: !!c.essential,
       });
     }
     // The settings record itself is versioned by the workspaces row.

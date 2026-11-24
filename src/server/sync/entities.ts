@@ -35,6 +35,8 @@ export interface EntityDef {
   /** Maintain derived data in the same DB transaction. */
   afterWrite?: (row: Record<string, any>, ctx: EntityCtx) => Promise<void>;
   creatable?: boolean; // default true
+  /** Records that can never be updated once created (e.g. net-worth snapshots). */
+  immutable?: boolean;
 }
 
 const fieldsOf = (e: EntityName) => Object.keys(entitySchemas[e].shape);
@@ -51,6 +53,27 @@ async function liveIds(tx: Tx, table: any, ids: (string | null | undefined)[]) {
 
 function requireRefs(found: Set<string>, ids: (string | null | undefined)[], code: string, what: string) {
   for (const id of ids) if (id && !found.has(id)) throw new DomainError(code, `Unknown ${what}`);
+}
+
+/** The referenced account must exist, be live, and have one of the given types. */
+async function requireAccountType(tx: Tx, id: string | null | undefined, types: string[], code: string, message: string) {
+  if (!id) return;
+  const [a] = await tx
+    .select({ type: s.accounts.type })
+    .from(s.accounts)
+    .where(and(eq(s.accounts.id, id), isNull(s.accounts.deletedAt)));
+  if (!a) throw new DomainError("unknown_account", "Unknown account");
+  if (!types.includes(a.type)) throw new DomainError(code, message);
+}
+
+async function requireCategoryKind(tx: Tx, id: string | null | undefined, kind: "income" | "expense") {
+  if (!id) return;
+  const [c] = await tx
+    .select({ kind: s.categories.kind })
+    .from(s.categories)
+    .where(and(eq(s.categories.id, id), isNull(s.categories.deletedAt)));
+  if (!c) throw new DomainError("unknown_category", "Unknown category");
+  if (c.kind !== kind) throw new DomainError("category_kind", `Choose a ${kind} category`);
 }
 
 async function rebuildEntries(row: Record<string, any>, ctx: EntityCtx) {
@@ -150,6 +173,23 @@ export const ENTITIES: Record<EntityName, EntityDef> = {
           throw new DomainError("invalid_refund", "A refund must link to an expense");
       }
       requireRefs(await liveIds(tx, s.allocations, [data.allocationId]), [data.allocationId], "unknown_allocation", "obligation");
+      // Phase 2 links
+      if (!!data.scheduleId !== !!data.occurrenceDate)
+        throw new DomainError("invalid_occurrence", "A scheduled occurrence needs both its schedule and date");
+      requireRefs(await liveIds(tx, s.schedules, [data.scheduleId]), [data.scheduleId], "unknown_schedule", "schedule");
+      requireRefs(await liveIds(tx, s.debts, [data.debtId]), [data.debtId], "unknown_debt", "debt");
+      requireRefs(await liveIds(tx, s.installmentPlans, [data.installmentPlanId]), [data.installmentPlanId], "unknown_installment", "installment plan");
+      requireRefs(await liveIds(tx, s.importBatches, [data.importBatchId]), [data.importBatchId], "unknown_import", "import");
+      if (data.billId) {
+        const [b] = await tx
+          .select({ cancelled: s.bills.cancelled })
+          .from(s.bills)
+          .where(and(eq(s.bills.id, data.billId), isNull(s.bills.deletedAt)));
+        if (!b) throw new DomainError("unknown_bill", "Unknown bill");
+        if (b.cancelled) throw new DomainError("bill_cancelled", "This bill was cancelled");
+        if (data.type !== "expense" && data.type !== "transfer")
+          throw new DomainError("invalid_bill_payment", "Bill payments are expenses or transfers");
+      }
       return data;
     },
     afterWrite: rebuildEntries,
@@ -198,6 +238,120 @@ export const ENTITIES: Record<EntityName, EntityDef> = {
     table: s.attachments as any,
     fields: fieldsOf("attachment"),
     creatable: false, // created by the upload endpoint, which stores the file first
+  },
+  // ------------------------------------------------------------------ Phase 2
+  debt: {
+    table: s.debts as any,
+    fields: fieldsOf("debt"),
+    prepare: async (d, { tx }) => {
+      await requireAccountType(tx, d.accountId, ["loan"], "debt_account", "A debt must use a loan account");
+      return d;
+    },
+  },
+  schedule: {
+    table: s.schedules as any,
+    fields: fieldsOf("schedule"),
+    prepare: async (d, { tx }) => {
+      if (d.kind === "transaction" && !d.accountId) throw new DomainError("required", "Choose an account");
+      if (d.txnType === "transfer") {
+        if (!d.toAccountId) throw new DomainError("required", "Choose the destination account");
+        if (d.toAccountId === d.accountId) throw new DomainError("same_account", "Source and destination must differ");
+      } else if (d.toAccountId) throw new DomainError("not_allowed", "Only transfers have a destination account");
+      if (d.kind === "bill") {
+        if (!d.billKind) throw new DomainError("required", "Choose the bill type");
+        if (d.txnType === "income") throw new DomainError("invalid", "Bills are paid, not received");
+        if (d.billKind === "card_payment" && !d.cardAccountId) throw new DomainError("required", "Choose the credit card");
+        if (d.billKind === "loan_installment" && !d.debtId) throw new DomainError("required", "Choose the loan");
+      } else if (d.billKind) throw new DomainError("not_allowed", "Only bill schedules have a bill type");
+      requireRefs(await liveIds(tx, s.accounts, [d.accountId, d.toAccountId]), [d.accountId, d.toAccountId], "unknown_account", "account");
+      await requireAccountType(tx, d.cardAccountId, ["credit_card"], "card_account", "Choose a credit card account");
+      if (d.txnType !== "transfer") await requireCategoryKind(tx, d.categoryId, d.txnType === "income" ? "income" : "expense");
+      else if (d.categoryId) throw new DomainError("not_allowed", "Transfers have no category");
+      requireRefs(await liveIds(tx, s.debts, [d.debtId]), [d.debtId], "unknown_debt", "debt");
+      requireRefs(await liveIds(tx, s.tags, d.tagIds), d.tagIds, "unknown_tag", "tag");
+      return d;
+    },
+  },
+  scheduleException: {
+    table: s.scheduleExceptions as any,
+    fields: fieldsOf("scheduleException"),
+    prepare: async (d, { tx }) => {
+      requireRefs(await liveIds(tx, s.schedules, [d.scheduleId]), [d.scheduleId], "unknown_schedule", "schedule");
+      if (d.action === "skip" && (d.overrideDate || d.overrideAmount))
+        throw new DomainError("invalid", "A skipped occurrence has no override");
+      return d;
+    },
+  },
+  bill: {
+    table: s.bills as any,
+    fields: fieldsOf("bill"),
+    prepare: async (d, { tx }) => {
+      if (!!d.scheduleId !== !!d.occurrenceDate)
+        throw new DomainError("invalid_occurrence", "A scheduled bill needs both its schedule and date");
+      if (d.kind === "card_payment" && !d.cardAccountId) throw new DomainError("required", "Choose the credit card");
+      if (d.kind === "loan_installment" && !d.debtId) throw new DomainError("required", "Choose the loan");
+      await requireCategoryKind(tx, d.categoryId, "expense");
+      requireRefs(await liveIds(tx, s.accounts, [d.accountId]), [d.accountId], "unknown_account", "account");
+      await requireAccountType(tx, d.cardAccountId, ["credit_card"], "card_account", "Choose a credit card account");
+      requireRefs(await liveIds(tx, s.debts, [d.debtId]), [d.debtId], "unknown_debt", "debt");
+      requireRefs(await liveIds(tx, s.schedules, [d.scheduleId]), [d.scheduleId], "unknown_schedule", "schedule");
+      return d;
+    },
+  },
+  cardProfile: {
+    table: s.cardProfiles as any,
+    fields: fieldsOf("cardProfile"),
+    prepare: async (d, { tx }) => {
+      await requireAccountType(tx, d.accountId, ["credit_card"], "card_account", "Card details need a credit card account");
+      return d;
+    },
+  },
+  installmentPlan: {
+    table: s.installmentPlans as any,
+    fields: fieldsOf("installmentPlan"),
+    prepare: async (d, { tx }) => {
+      await requireAccountType(tx, d.cardAccountId, ["credit_card"], "card_account", "Installments belong to a credit card");
+      requireRefs(await liveIds(tx, s.transactions, [d.transactionId]), [d.transactionId], "unknown_transaction", "transaction");
+      return d;
+    },
+  },
+  importBatch: {
+    table: s.importBatches as any,
+    fields: fieldsOf("importBatch"),
+    prepare: async (d, { tx }) => {
+      requireRefs(await liveIds(tx, s.accounts, [d.accountId]), [d.accountId], "unknown_account", "account");
+      return d;
+    },
+  },
+  goal: {
+    table: s.goals as any,
+    fields: fieldsOf("goal"),
+    prepare: async (d, { tx }) => {
+      requireRefs(await liveIds(tx, s.accounts, [d.accountId]), [d.accountId], "unknown_account", "account");
+      return d;
+    },
+  },
+  goalEntry: {
+    table: s.goalEntries as any,
+    fields: fieldsOf("goalEntry"),
+    prepare: async (d, { tx }) => {
+      requireRefs(await liveIds(tx, s.goals, [d.goalId]), [d.goalId], "unknown_goal", "goal");
+      requireRefs(await liveIds(tx, s.transactions, [d.transactionId]), [d.transactionId], "unknown_transaction", "transaction");
+      return d;
+    },
+  },
+  manualAsset: {
+    table: s.manualAssets as any,
+    fields: fieldsOf("manualAsset"),
+    prepare: async (d) => ({
+      ...d,
+      valuations: [...d.valuations].sort((a: any, b: any) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)),
+    }),
+  },
+  netWorthSnapshot: {
+    table: s.netWorthSnapshots as any,
+    fields: fieldsOf("netWorthSnapshot"),
+    immutable: true,
   },
 };
 

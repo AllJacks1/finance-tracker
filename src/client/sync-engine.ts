@@ -226,14 +226,30 @@ export class SyncEngine {
   private async nextBatch(): Promise<OutboxEntry[]> {
     const all = await this.store.db.outbox.orderBy("seq").toArray();
     const stuck = new Set<string>(); // entities with an unresolved conflict/failure: keep order
+    const stuckGroups = new Set<string>();
+    for (const o of all) if ((o.status === "conflict" || o.status === "failed") && o.groupId) stuckGroups.add(o.groupId);
     const batch: OutboxEntry[] = [];
+    const taken = new Set<string>();
     for (const o of all) {
       if (o.status === "conflict" || o.status === "failed") {
         stuck.add(o.entityId);
         continue;
       }
       if (o.status !== "pending" || stuck.has(o.entityId)) continue;
-      batch.push(o);
+      if (!o.groupId) {
+        batch.push(o);
+      } else {
+        // Atomic groups are sent whole, contiguously, in one push.
+        if (taken.has(o.groupId)) continue;
+        taken.add(o.groupId);
+        const members = all.filter((x) => x.groupId === o.groupId);
+        if (stuckGroups.has(o.groupId) || members.some((m) => m.status !== "pending" || stuck.has(m.entityId))) {
+          for (const m of members) stuck.add(m.entityId);
+          continue;
+        }
+        if (batch.length && batch.length + members.length > BATCH) break;
+        batch.push(...members);
+      }
       if (batch.length >= BATCH) break;
     }
     return batch;
@@ -254,6 +270,7 @@ export class SyncEngine {
           baseVersion: o.baseVersion,
           data: await this.store.decryptOpData(o),
           clientCreatedAt: o.createdAt,
+          ...(o.groupId ? { groupId: o.groupId } : {}),
         });
       }
       await this.store.db.outbox.bulkUpdate(batch.map((o) => ({ key: o.seq!, changes: { status: "inflight" as const, attempts: o.attempts + 1 } })));

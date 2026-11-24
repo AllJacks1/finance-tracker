@@ -51,11 +51,12 @@ function CategorySheet({ open, onOpenChange, category, kind }: { open: boolean; 
   const [icon, setIcon] = React.useState(category?.icon ?? "circle-ellipsis");
   const [color, setColor] = React.useState(category?.color ?? PALETTE[0]!);
   const [archived, setArchived] = React.useState(category?.isArchived ?? false);
+  const [essential, setEssential] = React.useState(category?.isEssential ?? false);
   const [error, setError] = React.useState<string | null>(null);
   const submit = async () => {
     if (!name.trim()) return setError("Name is required.");
     try {
-      await saveCategory({ id: category?.id ?? newId(), name: name.trim(), kind: category?.kind ?? kind, icon, color, isArchived: archived });
+      await saveCategory({ id: category?.id ?? newId(), name: name.trim(), kind: category?.kind ?? kind, icon, color, isArchived: archived, isEssential: essential });
       toast.success("Saved");
       onOpenChange(false);
     } catch (e) {
@@ -84,6 +85,12 @@ function CategorySheet({ open, onOpenChange, category, kind }: { open: boolean; 
           {PALETTE.map((c) => <button key={c} type="button" aria-label={c} onClick={() => setColor(c)} className={cn("press size-8 rounded-full ring-offset-2 ring-offset-background", color === c && "ring-2 ring-foreground")} style={{ background: c }} />)}
         </div>
       </Field>
+      {(category?.kind ?? kind) === "expense" ? (
+        <label className="flex items-center justify-between gap-3 rounded-xl border p-3 text-sm">
+          <span className="grid"><span className="font-medium">Essential expense</span><span className="text-xs text-muted-foreground">Used to estimate how long your emergency fund would last.</span></span>
+          <Switch checked={essential} onCheckedChange={setEssential} />
+        </label>
+      ) : null}
       {category ? <label className="flex items-center justify-between rounded-xl border p-3 text-sm">Archived (hidden for new transactions) <Switch checked={archived} onCheckedChange={setArchived} /></label> : null}
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </FormSheet>

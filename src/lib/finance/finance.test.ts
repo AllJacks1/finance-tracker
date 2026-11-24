@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Account, Allocation, Budget, Transaction } from "../domain/types";
+import { TXN_LINKS, type Account, type Allocation, type Budget, type Transaction } from "../domain/types";
 import { accountBalance, balanceHistory, computeBalances, reconciliationDifference, workspaceTotals } from "./balances";
 import { amountFor, budgetHistory, currentProgress, overallAllocation, periodFor } from "./budgets";
 import { csvCell } from "./csv";
@@ -35,7 +35,7 @@ const txn = (over: Partial<Transaction> & Pick<Transaction, "type" | "amount">):
   notes: null,
   tagIds: [],
   refundOfId: null,
-  allocationId: null,
+  ...TXN_LINKS,
   ...over,
 });
 const budget = (over: Partial<Budget> = {}): Budget => ({

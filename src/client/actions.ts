@@ -9,6 +9,7 @@ import { localDateOf } from "@/lib/finance/dates";
 import { validateTransaction } from "@/lib/finance/ledger";
 import { entitySchemas } from "@/lib/sync/protocol";
 import { vault } from "./vault";
+import { withPreferences } from "./settings";
 
 export class ActionError extends Error {}
 
@@ -18,7 +19,7 @@ function store() {
 }
 
 function settings(): WorkspaceSettings {
-  return (store().list("settings")[0]?.data as WorkspaceSettings | undefined) ?? { id: "", currency: "PHP", timezone: "Asia/Manila", weekStart: 1 };
+  return withPreferences(store().list("settings")[0]?.data as WorkspaceSettings | undefined);
 }
 
 async function save<E extends EntityName>(entity: E, data: EntityMap[E]) {

@@ -22,6 +22,39 @@ const positiveAmount = z.number().int().positive().max(MAX_AMOUNT);
 const signedAmount = z.number().int().min(-MAX_AMOUNT).max(MAX_AMOUNT);
 const color = z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable();
 const icon = z.string().regex(/^[a-z0-9-]{1,40}$/).nullable();
+/** Phase 2 optional link: older clients that omit it still validate. */
+const optId = id.nullable().default(null);
+const optDate = isoDate.nullable().default(null);
+const months = z.union([z.literal(3), z.literal(6), z.literal(9), z.literal(12)]);
+
+export const preferencesSchema = z.object({
+  stsHorizon: z.enum(["end_of_month", "next_income"]).default("end_of_month"),
+  emergencyTargetMonths: months.default(6),
+  essentialsLookbackMonths: months.default(3),
+  essentialsOverride: positiveAmount.nullable().default(null),
+  notifications: z
+    .object({
+      bills: z.boolean().default(true),
+      billDaysBefore: z.number().int().min(0).max(14).default(3),
+      scheduled: z.boolean().default(true),
+      cards: z.boolean().default(true),
+      loans: z.boolean().default(true),
+      budgets: z.boolean().default(true),
+      goals: z.boolean().default(true),
+      pushShowAmounts: z.boolean().default(false),
+    })
+    .prefault({}),
+});
+
+const ruleSchema = z
+  .object({
+    freq: z.enum(["once", "daily", "weekly", "monthly", "yearly"]),
+    interval: z.number().int().min(1).max(366),
+    startDate: isoDate,
+    endDate: isoDate.nullable(),
+    count: z.number().int().min(1).max(10_000).nullable(),
+  })
+  .refine((r) => !r.endDate || r.endDate >= r.startDate, "End date must be on or after the start date");
 
 export const entitySchemas = {
   settings: z.object({
@@ -36,6 +69,7 @@ export const entitySchemas = {
       }
     }, "Unknown timezone"),
     weekStart: z.number().int().min(0).max(6),
+    preferences: preferencesSchema.prefault({}),
   }),
   account: z.object({
     id,
@@ -56,6 +90,7 @@ export const entitySchemas = {
     icon,
     color,
     isArchived: z.boolean(),
+    isEssential: z.boolean().default(false),
   }),
   tag: z.object({ id, name: z.string().trim().min(1).max(40) }),
   transaction: z.object({
@@ -72,7 +107,15 @@ export const entitySchemas = {
     notes: text(2000),
     tagIds: z.array(id).max(20),
     refundOfId: id.nullable(),
-    allocationId: id.nullable(),
+    allocationId: id.nullable().default(null),
+    billId: optId,
+    scheduleId: optId,
+    occurrenceDate: optDate,
+    debtId: optId,
+    installmentPlanId: optId,
+    groupId: optId,
+    importBatchId: optId,
+    importFingerprint: z.string().regex(/^[0-9a-f]{64}$/).nullable().default(null),
   }),
   template: z.object({
     id,
@@ -123,11 +166,149 @@ export const entitySchemas = {
   }),
   attachment: z.object({
     id,
-    transactionId: id,
+    transactionId: optId,
+    billId: optId,
     filename: z.string().max(200),
     mime: z.string().max(100),
     sizeBytes: z.number().int().nonnegative(),
     sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  }),
+  // ---------------------------------------------------------------- Phase 2
+  debt: z.object({
+    id,
+    accountId: id,
+    creditor: name,
+    kind: z.enum(["personal", "bank", "installment", "other"]),
+    originalPrincipal: z.number().int().min(0).max(MAX_AMOUNT),
+    startDate: isoDate,
+    aprBp: z.number().int().min(0).max(100_000),
+    interestMethod: z.enum(["diminishing", "add_on", "none"]),
+    frequency: z.enum(["weekly", "biweekly", "monthly"]),
+    minimumPayment: z.number().int().min(0).max(MAX_AMOUNT),
+    dueDay: z.number().int().min(1).max(31).nullable(),
+    termMonths: z.number().int().min(1).max(600).nullable(),
+    status: z.enum(["active", "paid_off", "archived"]),
+    notes: text(1000),
+  }),
+  schedule: z.object({
+    id,
+    kind: z.enum(["transaction", "bill"]),
+    name,
+    txnType: z.enum(["income", "expense", "transfer"]),
+    amount: positiveAmount,
+    accountId: id.nullable(),
+    toAccountId: id.nullable(),
+    categoryId: id.nullable(),
+    description: text(200),
+    notes: text(2000),
+    tagIds: z.array(id).max(20),
+    rule: ruleSchema,
+    pauses: z.array(z.object({ from: isoDate, to: isoDate.nullable() })).max(200),
+    status: z.enum(["active", "paused", "cancelled"]),
+    billKind: z.enum(["general", "card_payment", "loan_installment"]).nullable(),
+    cardAccountId: id.nullable(),
+    debtId: id.nullable(),
+    paysBillScheduleId: id.nullable(),
+    reminderDays: z.number().int().min(0).max(30).nullable(),
+    previousScheduleId: id.nullable(),
+  }),
+  scheduleException: z.object({
+    id,
+    scheduleId: id,
+    occurrenceDate: isoDate,
+    action: z.enum(["skip", "override"]),
+    overrideDate: isoDate.nullable(),
+    overrideAmount: positiveAmount.nullable(),
+  }),
+  bill: z.object({
+    id,
+    name,
+    kind: z.enum(["general", "card_payment", "loan_installment"]),
+    categoryId: id.nullable(),
+    expectedAmount: z.number().int().min(0).max(MAX_AMOUNT),
+    actualAmount: z.number().int().min(0).max(MAX_AMOUNT).nullable(),
+    minimumAmount: z.number().int().min(0).max(MAX_AMOUNT).nullable(),
+    dueDate: isoDate,
+    accountId: id.nullable(),
+    notes: text(2000),
+    scheduleId: id.nullable(),
+    occurrenceDate: isoDate.nullable(),
+    cardAccountId: id.nullable(),
+    debtId: id.nullable(),
+    statementClosingDate: isoDate.nullable(),
+    cancelled: z.boolean(),
+  }),
+  cardProfile: z.object({
+    id,
+    accountId: id,
+    creditLimit: z.number().int().min(0).max(MAX_AMOUNT),
+    statementDay: z.number().int().min(1).max(31),
+    dueDaysAfterStatement: z.number().int().min(1).max(60),
+    minPaymentPctBp: z.number().int().min(0).max(10_000),
+    minPaymentFloor: z.number().int().min(0).max(MAX_AMOUNT),
+    aprBp: z.number().int().min(0).max(100_000),
+    autoBills: z.boolean(),
+  }),
+  installmentPlan: z.object({
+    id,
+    cardAccountId: id,
+    transactionId: id.nullable(),
+    description: z.string().trim().min(1).max(200),
+    principal: positiveAmount,
+    months: z.number().int().min(1).max(120),
+    monthlyAmount: positiveAmount,
+    firstBillingDate: isoDate,
+    feeAmount: z.number().int().min(0).max(MAX_AMOUNT),
+    status: z.enum(["active", "cancelled"]),
+  }),
+  importBatch: z.object({
+    id,
+    accountId: id,
+    filename: z.string().max(200),
+    fileSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    rowCount: z.number().int().min(0),
+    importedCount: z.number().int().min(0),
+    skippedCount: z.number().int().min(0),
+  }),
+  goal: z.object({
+    id,
+    name,
+    kind: z.enum(["emergency", "travel", "education", "home", "vehicle", "purchase", "general"]),
+    targetAmount: z.number().int().min(0).max(MAX_AMOUNT),
+    targetDate: isoDate.nullable(),
+    accountId: id.nullable(),
+    description: text(1000),
+    status: z.enum(["active", "completed", "archived"]),
+    completedAt: isoDate.nullable(),
+  }),
+  goalEntry: z.object({
+    id,
+    goalId: id,
+    amount: signedAmount.refine((n) => n !== 0, "Amount cannot be zero"),
+    entryDate: isoDate,
+    note: text(500),
+    transactionId: id.nullable(),
+    groupId: id.nullable(),
+  }),
+  manualAsset: z.object({
+    id,
+    name,
+    kind: z.enum(["investment", "property", "vehicle", "other"]),
+    valuations: z.array(z.object({ date: isoDate, value: z.number().int().min(0).max(MAX_AMOUNT) })).min(1).max(1000),
+    isActive: z.boolean(),
+    notes: text(1000),
+  }),
+  netWorthSnapshot: z.object({
+    id,
+    snapshotDate: isoDate,
+    kind: z.enum(["auto", "manual"]),
+    assets: signedAmount,
+    liabilities: signedAmount,
+    netWorth: signedAmount,
+    breakdown: z
+      .array(z.object({ kind: z.enum(["account", "asset"]), id, name: z.string().max(80), liability: z.boolean(), value: signedAmount }))
+      .max(500),
+    recordedAt: instant,
   }),
 } satisfies Record<EntityName, z.ZodType>;
 
@@ -142,6 +323,17 @@ export const ENTITY_ENUM = z.enum([
   "allocation",
   "reconciliation",
   "attachment",
+  "debt",
+  "schedule",
+  "scheduleException",
+  "bill",
+  "cardProfile",
+  "installmentPlan",
+  "importBatch",
+  "goal",
+  "goalEntry",
+  "manualAsset",
+  "netWorthSnapshot",
 ]);
 
 export const OP_KINDS = ["create", "update", "delete", "restore"] as const;
@@ -157,6 +349,11 @@ export const syncOpSchema = z.object({
   /** Full entity data for create/update; omitted for delete/restore. */
   data: z.record(z.string(), z.unknown()).optional(),
   clientCreatedAt: instant,
+  /**
+   * Ops sharing a groupId are applied ALL-OR-NOTHING (one savepoint). Group ops must be sent
+   * contiguously in one push. Ops without a groupId behave exactly as before.
+   */
+  groupId: id.optional(),
 });
 export type SyncOp = z.infer<typeof syncOpSchema>;
 

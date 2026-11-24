@@ -217,7 +217,8 @@ export class WorkspaceStore {
     let settled = false;
     await this.db.transaction("rw", [this.db.records, this.db.outbox], async () => {
       const existing = (await this.db.outbox.where("entityId").equals(id).sortBy("seq")) as OutboxEntry[];
-      const allPending = existing.length > 0 && existing.every((o) => o.status === "pending");
+      // Never coalesce into an op that belongs to an atomic group.
+      const allPending = existing.length > 0 && existing.every((o) => o.status === "pending" && !o.groupId);
       const first = existing[0];
       let replaceWith: { kind: OpKind; baseVersion: number | null } | null | "drop" = null;
 
@@ -257,6 +258,73 @@ export class WorkspaceStore {
     this.emit(true);
     this.onLocalChange?.();
     return next;
+  }
+
+  /**
+   * Several changes saved ATOMICALLY: all records and their outbox ops are written in one
+   * IndexedDB transaction, and the ops share a groupId so the server applies them all-or-nothing
+   * (e.g. a loan payment = principal transfer + interest expense).
+   */
+  async mutateGroup(changes: { entity: EntityName; id: string; kind: OpKind; data?: unknown }[]): Promise<void> {
+    if (!changes.length) return;
+    const groupId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const prepared: { rec: LocalRecord; stored: StoredRecord; op: OutboxEntry }[] = [];
+    const seen = new Set<string>();
+    for (const c of changes) {
+      if (seen.has(c.id)) throw new Error("A record can appear only once in a group");
+      seen.add(c.id);
+      const cur = this.get(c.entity, c.id);
+      if (c.kind !== "create" && !cur) throw new Error("Record not found");
+      if (c.kind === "create" && cur) throw new Error("Record already exists");
+      let rec: LocalRecord;
+      if (c.kind === "create")
+        rec = { entity: c.entity, id: c.id, version: 0, data: c.data as never, deletedAt: null, changeSeq: 0, updatedAt: now, pending: true, conflict: false, failed: null };
+      else if (c.kind === "update") rec = { ...cur!, data: c.data as never, updatedAt: now, pending: true };
+      else if (c.kind === "delete") rec = { ...cur!, deletedAt: now, updatedAt: now, pending: true };
+      else rec = { ...cur!, deletedAt: null, updatedAt: now, pending: true };
+      const payload = c.kind === "create" || c.kind === "update" ? { data: rec.data } : { data: null };
+      const [stored, wrapped] = await Promise.all([this.encodeRecord(rec), encryptJson(this.dek, payload)]);
+      prepared.push({
+        rec,
+        stored,
+        op: {
+          opId: crypto.randomUUID(),
+          entity: c.entity,
+          entityId: c.id,
+          kind: c.kind,
+          baseVersion: c.kind === "create" ? null : cur!.version,
+          status: "pending",
+          attempts: 0,
+          nextAttemptAt: 0,
+          lastError: null,
+          createdAt: now,
+          groupId,
+          ...wrapped,
+        },
+      });
+    }
+    await this.db.transaction("rw", [this.db.records, this.db.outbox], async () => {
+      for (const p of prepared) {
+        await this.db.records.put(p.stored);
+        await this.db.outbox.add(p.op);
+      }
+    });
+    for (const p of prepared) this.setMem(p.rec);
+    await this.refreshSummary();
+    this.emit(true);
+    this.onLocalChange?.();
+  }
+
+  /** Entity ids that share an atomic group with any op of `entityId`. */
+  private async groupMates(entityId: string): Promise<{ groups: Set<string>; entityIds: Set<string> }> {
+    const own = await this.db.outbox.where("entityId").equals(entityId).toArray();
+    const groups = new Set(own.map((o) => o.groupId).filter((g): g is string => !!g));
+    const entityIds = new Set<string>([entityId]);
+    if (groups.size) {
+      for (const o of await this.db.outbox.toArray()) if (o.groupId && groups.has(o.groupId)) entityIds.add(o.entityId);
+    }
+    return { groups, entityIds };
   }
 
   async decryptOpData(op: OutboxEntry): Promise<Record<string, unknown> | undefined> {
@@ -410,17 +478,25 @@ export class WorkspaceStore {
 
   /** Retry failed ops (e.g. after fixing a referenced record) or discard them. */
   async retryFailed(entityId: string) {
-    const ops = await this.db.outbox.where("entityId").equals(entityId).toArray();
-    for (const o of ops) if (o.status === "failed") await this.db.outbox.update(o.seq!, { status: "pending", lastError: null, nextAttemptAt: 0 });
-    const cur = [...this.records.values()].map((m) => m.get(entityId)).find(Boolean);
-    if (cur) this.setMem({ ...cur, failed: null });
+    // A failed op that belongs to an atomic group is retried together with its group.
+    const { entityIds } = await this.groupMates(entityId);
+    for (const id of entityIds) {
+      const ops = await this.db.outbox.where("entityId").equals(id).toArray();
+      for (const o of ops) if (o.status === "failed") await this.db.outbox.update(o.seq!, { status: "pending", lastError: null, nextAttemptAt: 0 });
+      const cur = [...this.records.values()].map((m) => m.get(id)).find(Boolean);
+      if (cur) this.setMem({ ...cur, failed: null });
+    }
     await this.refreshSummary();
     this.emit(true);
     this.onLocalChange?.();
   }
 
   /** Discard unsynced local changes to a record and restore the last server version (if any). */
-  async discardLocal(entityId: string) {
+  async discardLocal(entityId: string, _visited = new Set<string>()) {
+    // Discarding part of an atomic group discards the whole group.
+    _visited.add(entityId);
+    const { entityIds } = await this.groupMates(entityId);
+    for (const id of entityIds) if (!_visited.has(id)) await this.discardLocal(id, _visited);
     const ops = await this.db.outbox.where("entityId").equals(entityId).toArray();
     const cur = [...this.records.values()].map((m) => m.get(entityId)).find(Boolean);
     await this.db.transaction("rw", [this.db.records, this.db.outbox, this.db.conflicts], async () => {

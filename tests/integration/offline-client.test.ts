@@ -17,7 +17,7 @@ import { UserDB } from "@/client/local-db";
 import { WorkspaceStore } from "@/client/store";
 import { SyncEngine } from "@/client/sync-engine";
 import type { ConnectionInfo } from "@/lib/sync/connection-policy";
-import type { Account, Transaction } from "@/lib/domain/types";
+import { TXN_LINKS, type Account, type Transaction } from "@/lib/domain/types";
 import { adminSql, createUserAndLogin, login, ORIGIN, resetDatabase, setupAdmin, STRONG } from "./helpers";
 
 type RouteMod = Record<string, (req: Request, ctx: unknown) => Promise<Response>>;
@@ -104,7 +104,7 @@ const txn = (id: string, accountId: string, over: Partial<Transaction> = {}): Tr
   notes: null,
   tagIds: [],
   refundOfId: null,
-  allocationId: null,
+  ...TXN_LINKS,
   ...over,
 });
 

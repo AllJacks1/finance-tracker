@@ -12,6 +12,7 @@ import {
   HeartPulse,
   Landmark,
   PiggyBank,
+  Percent,
   Plug,
   Receipt,
   ShoppingBag,
@@ -43,6 +44,7 @@ export const ICONS: Record<string, LucideIcon> = {
   "credit-card": CreditCard,
   "hand-coins": HandCoins,
   banknote: Banknote,
+  percent: Percent,
 };
 
 export const ACCOUNT_TYPE_META: Record<AccountType, { label: string; icon: string }> = {

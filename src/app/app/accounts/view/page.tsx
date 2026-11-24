@@ -16,7 +16,7 @@ import { useFinance, useRecords } from "@/client/hooks";
 import { balanceHistory, reconciliationDifference } from "@/lib/finance/balances";
 import { addDays } from "@/lib/finance/dates";
 import { formatPHP } from "@/lib/finance/money";
-import { isLiabilityType } from "@/lib/domain/types";
+import { isLiabilityType, TXN_LINKS } from "@/lib/domain/types";
 
 export default function AccountViewPage() {
   return (
@@ -101,7 +101,7 @@ function ReconcileSheet({ accountId, onClose }: { accountId: string; onClose: ()
           notes: `Statement balance ${formatPHP(statementBalance)} on ${date}`,
           tagIds: [],
           refundOfId: null,
-          allocationId: null,
+          ...TXN_LINKS,
         });
       }
       await saveReconciliation({ id: newId(), accountId, statementDate: date, statementBalance, computedBalance: diff.computed, adjustmentTransactionId, note: null });

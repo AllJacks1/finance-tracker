@@ -59,6 +59,8 @@ export interface OutboxEntry extends Wrapped {
   nextAttemptAt: number;
   lastError: string | null;
   createdAt: string;
+  /** Ops sharing a groupId are applied all-or-nothing by the server. */
+  groupId?: string;
 }
 
 export interface ConflictEntry extends Wrapped {

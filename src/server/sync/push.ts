@@ -5,6 +5,7 @@ import { entitySchemas, type OpResult, type ServerRecord, type SyncOp } from "@/
 import { db, withContext, type Tx } from "../db";
 import { devices, syncEvents, syncOps, workspaces } from "../db/schema";
 import { log } from "../log";
+import { ApiError } from "../errors";
 import { nextChangeSeq } from "../workspace";
 import { DomainError, ENTITIES, toEntityData, type EntityCtx } from "./entities";
 
@@ -14,6 +15,51 @@ class Conflict extends Error {
   constructor(public record: ServerRecord) {
     super("conflict");
   }
+}
+
+/** A create for a record that already exists with exactly the same data (e.g. the same
+ *  scheduled occurrence confirmed on two devices). Treated as a successful duplicate. */
+class IdenticalCreate extends Error {
+  constructor(public record: ServerRecord) {
+    super("identical");
+  }
+}
+
+/** A failure inside an atomic group; the whole group is rolled back. */
+class GroupFailure extends Error {
+  constructor(
+    public index: number,
+    public cause: unknown,
+  ) {
+    super("group_failed");
+  }
+}
+
+const IGNORED_IN_COMPARISON = new Set(["id", "localDate"]);
+
+const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/;
+
+/** Normalise values so client JSON and Postgres output compare equal (timestamps, nesting). */
+function norm(v: unknown): unknown {
+  if (typeof v === "string" && TIMESTAMP_RE.test(v)) {
+    const t = new Date(v.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00"));
+    return Number.isNaN(t.getTime()) ? v : t.toISOString();
+  }
+  if (Array.isArray(v)) return v.map(norm);
+  if (v && typeof v === "object") {
+    const o: Record<string, unknown> = {};
+    for (const k of Object.keys(v).sort()) o[k] = norm((v as Record<string, unknown>)[k]);
+    return o;
+  }
+  return v ?? null;
+}
+
+function sameData(fields: string[], a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  for (const f of fields) {
+    if (IGNORED_IN_COMPARISON.has(f)) continue;
+    if (JSON.stringify(norm(a[f])) !== JSON.stringify(norm(b[f]))) return false;
+  }
+  return true;
 }
 
 export function toServerRecord(entity: EntityName, row: Record<string, any>): ServerRecord {
@@ -45,8 +91,12 @@ async function applyOp(op: SyncOp, ctx: EntityCtx, deviceId: string): Promise<Se
 
   if (op.kind === "create") {
     if (def.creatable === false) throw new DomainError("not_creatable", `${op.entity} cannot be created via sync`);
-    if (current) throw new Conflict(toServerRecord(op.entity, current));
     const parsed = entitySchemas[op.entity].parse({ ...op.data, id: op.entityId });
+    if (current) {
+      const existing = toServerRecord(op.entity, current);
+      if (!current.deletedAt && sameData(def.fields, parsed as Record<string, unknown>, existing.data)) throw new IdenticalCreate(existing);
+      throw new Conflict(existing);
+    }
     const data = def.prepare ? await def.prepare(parsed as any, ctx) : parsed;
     const [row] = await tx
       .insert(table)
@@ -70,6 +120,7 @@ async function applyOp(op: SyncOp, ctx: EntityCtx, deviceId: string): Promise<Se
 
   let patch: Record<string, any>;
   if (op.kind === "update") {
+    if (def.immutable) throw new DomainError("immutable", "This record can't be changed once recorded");
     if (current.deletedAt) throw new Conflict(toServerRecord(op.entity, current));
     const parsed = entitySchemas[op.entity].parse({ ...op.data, id: op.entityId });
     patch = def.prepare ? await def.prepare(parsed as any, ctx) : parsed;
@@ -100,12 +151,50 @@ async function applyOp(op: SyncOp, ctx: EntityCtx, deviceId: string): Promise<Se
   return toServerRecord(op.entity, row);
 }
 
+/** Map an error from applying one op to a client-facing rejection (or rethrow if unexpected). */
+function rejection(e: unknown): { code: string; message: string } {
+  if (e instanceof DomainError) return { code: e.code, message: e.message };
+  if ((e as { name?: string }).name === "ZodError") return { code: "validation", message: "Invalid data" };
+  const code = pgCode(e);
+  if (code === "23503") return { code: "reference_missing", message: "A referenced record does not exist" };
+  if (code === "23505") {
+    const constraint = String((e as { constraint_name?: string; cause?: { constraint_name?: string } }).constraint_name ?? (e as { cause?: { constraint_name?: string } }).cause?.constraint_name ?? "");
+    if (constraint.includes("occurrence")) return { code: "duplicate_occurrence", message: "This occurrence was already recorded" };
+    if (constraint.includes("import_fp")) return { code: "duplicate_import", message: "This row was already imported" };
+    return { code: "id_conflict", message: "This record ID is already in use" };
+  }
+  if (code === "23514") return { code: "invalid", message: "Invalid change" };
+  throw e; // unexpected: abort the batch, the client retries later
+}
+
+/** Split ops into units: consecutive ops sharing a groupId form one atomic unit. */
+function toUnits(ops: SyncOp[]): SyncOp[][] {
+  const units: SyncOp[][] = [];
+  const closed = new Set<string>();
+  for (const op of ops) {
+    const last = units[units.length - 1];
+    if (op.groupId && last && last[0]!.groupId === op.groupId) {
+      last.push(op);
+      continue;
+    }
+    if (op.groupId) {
+      if (closed.has(op.groupId)) throw new ApiError(400, "invalid_group", "Ops of a group must be sent together");
+      closed.add(op.groupId);
+    }
+    units.push([op]);
+  }
+  return units;
+}
+
 /**
  * Apply a batch of ops for the authenticated user's workspace.
  * - Writes to one workspace are serialised (row lock), so change_seq is strictly ordered.
- * - Each op runs in its own SAVEPOINT: a conflicting/invalid op does not undo the others.
- * - Applied/rejected ops are recorded in sync_ops by opId, so retries are idempotent even if the
- *   previous response was lost after commit.
+ * - Each unit runs in its own SAVEPOINT: a standalone op, or a whole atomic GROUP (ops sharing a
+ *   groupId). A failure rolls back only that unit; for a group, every op in it is refused.
+ * - Applied (and standalone rejected) ops are recorded in sync_ops by opId, so retries are
+ *   idempotent even if the previous response was lost after commit. Failed groups are not
+ *   recorded, so they can be retried after the user resolves the cause.
+ * - A create of an existing record with identical data is a "duplicate", not a conflict.
  * - After a conflict or rejection, later ops for the same entity in the batch are held back.
  */
 export async function pushOps(
@@ -116,6 +205,7 @@ export async function pushOps(
   let applied = 0;
   let conflicts = 0;
   let rejected = 0;
+  const units = toUnits(ops);
 
   await withContext({ userId: auth.userId, workspaceId: auth.workspaceId }, async (tx: Tx) => {
     const [ws] = await tx
@@ -131,74 +221,88 @@ export async function pushOps(
       .where(inArray(syncOps.opId, ops.map((o) => o.opId)));
     const seenById = new Map(seen.map((r) => [r.opId, r]));
     const blocked = new Set<string>();
+    const base = (op: SyncOp) => ({ opId: op.opId, entity: op.entity, entityId: op.entityId });
 
-    for (const op of ops) {
-      const prior = seenById.get(op.opId);
-      if (prior) {
-        const r = prior.result as unknown as OpResult;
-        results.push({ ...r, status: r.status === "applied" ? "duplicate" : r.status });
+    const record = async (op: SyncOp, result: OpResult) => {
+      await tx.insert(syncOps).values({
+        opId: op.opId,
+        workspaceId: auth.workspaceId,
+        deviceId: auth.deviceId,
+        entity: op.entity,
+        entityId: op.entityId,
+        status: result.status === "rejected" ? "rejected" : "applied",
+        result: { ...result, status: result.status === "rejected" ? "rejected" : "applied" } as any,
+      });
+    };
+
+    for (const unit of units) {
+      // Replays of ops that were already applied.
+      if (unit.every((op) => seenById.has(op.opId))) {
+        for (const op of unit) {
+          const r = seenById.get(op.opId)!.result as unknown as OpResult;
+          results.push({ ...r, status: r.status === "applied" ? "duplicate" : r.status });
+        }
         continue;
       }
-      if (blocked.has(op.entityId)) {
-        results.push({ opId: op.opId, entity: op.entity, entityId: op.entityId, status: "blocked" });
+      if (unit.some((op) => blocked.has(op.entityId) || seenById.has(op.opId))) {
+        for (const op of unit) results.push({ ...base(op), status: "blocked" });
         continue;
       }
-      let result: OpResult;
+
+      const ctx = (sp: Tx) => ({ tx: sp, workspaceId: auth.workspaceId, timezone: ws.timezone });
+      const isGroup = unit.length > 1 || !!unit[0]!.groupId;
       try {
-        const record = await tx.transaction(async (sp) =>
-          applyOp(op, { tx: sp, workspaceId: auth.workspaceId, timezone: ws.timezone }, auth.deviceId),
-        );
-        result = { opId: op.opId, entity: op.entity, entityId: op.entityId, status: "applied", record };
-        applied++;
+        const out = await tx.transaction(async (sp) => {
+          const res: OpResult[] = [];
+          for (let i = 0; i < unit.length; i++) {
+            const op = unit[i]!;
+            try {
+              const rec = await sp.transaction((inner) => applyOp(op, ctx(inner), auth.deviceId));
+              res.push({ ...base(op), status: "applied", record: rec });
+            } catch (e) {
+              if (e instanceof IdenticalCreate) res.push({ ...base(op), status: "duplicate", record: e.record });
+              else throw new GroupFailure(i, e);
+            }
+          }
+          return res;
+        });
+        for (let i = 0; i < unit.length; i++) {
+          const r = out[i]!;
+          applied++;
+          await record(unit[i]!, r);
+          results.push(r);
+        }
       } catch (e) {
-        if (e instanceof Conflict) {
-          result = {
-            opId: op.opId,
-            entity: op.entity,
-            entityId: op.entityId,
+        if (!(e instanceof GroupFailure)) throw e;
+        const failing = unit[e.index]!;
+        let failResult: OpResult;
+        if (e.cause instanceof Conflict) {
+          failResult = {
+            ...base(failing),
             status: "conflict",
-            record: e.record,
+            record: e.cause.record,
             error: { code: "version_conflict", message: "This record was changed on another device" },
           };
           conflicts++;
         } else {
-          let code = "invalid";
-          let message = "Invalid change";
-          if (e instanceof DomainError) {
-            code = e.code;
-            message = e.message;
-          } else if ((e as { name?: string }).name === "ZodError") {
-            code = "validation";
-            message = "Invalid data";
-          } else if (pgCode(e) === "23503") {
-            code = "reference_missing";
-            message = "A referenced record does not exist";
-          } else if (pgCode(e) === "23505") {
-            code = "id_conflict";
-            message = "This record ID is already in use";
-          } else if (pgCode(e) === "23514") {
-            code = "invalid";
-            message = "Invalid change";
-          } else {
-            throw e; // unexpected: abort the batch, client retries later
-          }
-          result = { opId: op.opId, entity: op.entity, entityId: op.entityId, status: "rejected", error: { code, message } };
+          failResult = { ...base(failing), status: "rejected", error: rejection(e.cause) };
           rejected++;
+          if (!isGroup) await record(failing, failResult);
         }
-        blocked.add(op.entityId);
+        for (let i = 0; i < unit.length; i++) {
+          const op = unit[i]!;
+          blocked.add(op.entityId);
+          if (i === e.index) results.push(failResult);
+          else {
+            rejected++;
+            results.push({
+              ...base(op),
+              status: "rejected",
+              error: { code: "group_failed", message: "Part of a change that couldn't be saved: " + (failResult.error?.message ?? "") },
+            });
+          }
+        }
       }
-      if (result.status === "applied" || result.status === "rejected") {
-        await tx.insert(syncOps).values({
-          opId: op.opId,
-          workspaceId: auth.workspaceId,
-          deviceId: auth.deviceId,
-          entity: op.entity,
-          entityId: op.entityId,
-          status: result.status,
-          result: result as any,
-        });
-      }
-      results.push(result);
     }
   });
 
