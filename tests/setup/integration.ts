@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 /**
  * Integration tests run route handlers directly against the real `finance_test` Postgres database,
  * connecting as the restricted ft_app role exactly like production.
