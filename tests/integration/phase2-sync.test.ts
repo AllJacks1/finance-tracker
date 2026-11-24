@@ -223,3 +223,35 @@ describe("Phase 2 isolation", () => {
     await sql.end();
   });
 });
+
+describe("CSV import duplicate backstop and bill receipts ownership", () => {
+  it("the database refuses the same imported row twice even under a different id", async () => {
+    const fp = "a".repeat(64);
+    const batch = uuidv7();
+    const mk = () => op("transaction", "create", uuidv7(), txn({ accountId: ids.bank, importFingerprint: fp, importBatchId: batch, amount: 12_345 }));
+    const r = await push(A, [
+      op("importBatch", "create", batch, { accountId: ids.bank, filename: "bdo.csv", fileSha256: "b".repeat(64), rowCount: 1, importedCount: 1, skippedCount: 0 }),
+      mk(),
+    ]);
+    expect(statuses(r)).toEqual(["applied", "applied"]);
+    expect(statuses(await push(A, [mk()]))).toEqual(["rejected:duplicate_import"]);
+  });
+
+  it("receipts can be attached only to the owner's bills", async () => {
+    const { POST } = await import("@/app/api/receipts/route");
+    const billId = uuidv7();
+    await push(A, [op("bill", "create", billId, { name: "Water", kind: "general", categoryId: null, expectedAmount: 50_000, actualAmount: null, minimumAmount: null, dueDate: "2026-11-28", accountId: ids.bank, notes: null, scheduleId: null, occurrenceDate: null, cardAccountId: null, debtId: null, statementClosingDate: null, cancelled: false })]);
+    const body = new Uint8Array([1, 2, 3]);
+    const sha = (await import("node:crypto")).createHash("sha256").update(body).digest("hex");
+    const req = (cookie: string) =>
+      new Request(`http://localhost:3000/api/receipts?id=${uuidv7()}&billId=${billId}&filename=r.jpg&sha256=${sha}`, {
+        method: "POST",
+        headers: { origin: "http://localhost:3000", cookie, "content-type": "image/jpeg" },
+        body,
+      });
+    const asB = await POST(req(B.cookie), {} as never);
+    expect(asB.status).toBe(404); // RLS hides A's bill from B
+    const asA = await POST(req(A.cookie), {} as never);
+    expect(asA.status).toBe(503); // owner passes the ownership check; storage isn't configured in tests
+  });
+});
